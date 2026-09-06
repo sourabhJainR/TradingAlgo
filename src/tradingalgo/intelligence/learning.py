@@ -23,7 +23,7 @@ HORIZON_DAYS: dict[Horizon, int] = {
 
 
 class LeakageError(ValueError):
-    """Raised when a validation input contains information from the future."""
+    """Raised when validation input contains information from the future."""
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,6 @@ class PredictionSnapshot:
 
 
 def prediction_id_for(advisory: Advisory, as_of: datetime) -> str:
-    """Create a reproducible identity for the exact advisory/as-of snapshot."""
     payload = {
         "ticker": advisory.ticker.upper(), "as_of": _utc(as_of).isoformat(),
         "action": advisory.action, "score": advisory.score, "confidence": advisory.confidence,
@@ -115,10 +114,11 @@ class WalkForwardConfig:
 
 
 class LearningStore:
-    """Small durable SQLite store for exact predictions and realized outcomes."""
+    """Durable SQLite store for exact prediction snapshots and realized outcomes."""
 
     def __init__(self, path: str | Path = "data/tradingalgo_learning.sqlite") -> None:
-        self.path = str(path); Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self.path = str(path)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path)
         self.db.execute("CREATE TABLE IF NOT EXISTS predictions (prediction_id TEXT PRIMARY KEY, ticker TEXT NOT NULL, as_of TEXT NOT NULL, action TEXT NOT NULL, score REAL NOT NULL, confidence REAL NOT NULL, horizon TEXT NOT NULL, evidence_ids TEXT NOT NULL, factor_scores TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS outcomes (prediction_id TEXT PRIMARY KEY, ticker TEXT NOT NULL, observed_at TEXT NOT NULL, realized_return REAL NOT NULL, benchmark_return REAL NOT NULL, max_drawdown REAL NOT NULL, maximum_adverse_excursion REAL NOT NULL DEFAULT 0, maximum_favorable_excursion REAL NOT NULL DEFAULT 0, FOREIGN KEY(prediction_id) REFERENCES predictions(prediction_id))")
@@ -134,8 +134,18 @@ class LearningStore:
         self.db.commit()
 
     def save_outcome(self, outcome: OutcomeObservation) -> None:
+        row = self.db.execute("SELECT ticker, as_of, horizon FROM predictions WHERE prediction_id = ?", (outcome.prediction_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown prediction_id: {outcome.prediction_id}")
+        ticker, as_of, horizon_value = row
+        if ticker.upper() != outcome.ticker.upper():
+            raise LeakageError("prediction/outcome ticker mismatch")
+        as_of_dt = datetime.fromisoformat(as_of)
+        horizon = Horizon(horizon_value)
+        if _utc(outcome.observed_at) < _utc(as_of_dt) + timedelta(days=HORIZON_DAYS[horizon]):
+            raise LeakageError("outcome is inside the prediction horizon")
         self.db.execute("INSERT OR REPLACE INTO outcomes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (outcome.prediction_id, outcome.ticker, _utc(outcome.observed_at).isoformat(), outcome.realized_return,
+            (outcome.prediction_id, outcome.ticker.upper(), _utc(outcome.observed_at).isoformat(), outcome.realized_return,
              outcome.benchmark_return, outcome.max_drawdown, outcome.maximum_adverse_excursion,
              outcome.maximum_favorable_excursion))
         self.db.commit()
@@ -153,27 +163,33 @@ class FactorCalibrator:
         self.min_weight, self.max_weight, self.strength, self.min_observations = min_weight, max_weight, strength, min_observations
 
     def fit(self, snapshots: Sequence[PredictionSnapshot], outcomes: Sequence[OutcomeObservation]) -> dict[str, float]:
-        by_id = {o.prediction_id: o for o in outcomes}; pairs: dict[str, list[tuple[float, float]]] = {}
+        by_id = {o.prediction_id: o for o in outcomes}
+        pairs: dict[str, list[tuple[float, float]]] = {}
         for snapshot in snapshots:
             outcome = by_id.get(snapshot.prediction_id)
-            if outcome is None or _utc(outcome.observed_at) <= _utc(snapshot.as_of): continue
-            for factor, value in snapshot.factor_scores.items(): pairs.setdefault(factor, []).append((float(value), outcome.excess_return))
-        raw = {f: self._weight(v) for f, v in pairs.items() if len(v) >= self.min_observations}
-        if not raw: return {}
+            if outcome is None or _utc(outcome.observed_at) <= _utc(snapshot.as_of):
+                continue
+            for factor, value in snapshot.factor_scores.items():
+                pairs.setdefault(factor, []).append((float(value), outcome.excess_return))
+        raw = {factor: self._weight(values) for factor, values in pairs.items() if len(values) >= self.min_observations}
+        if not raw:
+            return {}
         center = mean(raw.values()) or 1.0
-        return {f: max(self.min_weight, min(self.max_weight, w / center)) for f, w in raw.items()}
+        return {factor: max(self.min_weight, min(self.max_weight, weight / center)) for factor, weight in raw.items()}
 
     def _weight(self, pairs: Sequence[tuple[float, float]]) -> float:
-        xs, ys = [x for x, _ in pairs], [y for _, y in pairs]; sx, sy = _stdev(xs), _stdev(ys)
-        if sx == 0 or sy == 0: return 1.0
+        xs, ys = [x for x, _ in pairs], [y for _, y in pairs]
+        sx, sy = _stdev(xs), _stdev(ys)
+        if sx == 0 or sy == 0:
+            return 1.0
         corr = sum((x - mean(xs)) * (y - mean(ys)) for x, y in pairs) / ((len(pairs) - 1) * sx * sy)
-        # Shrink noisy correlations toward zero as sample size falls.
         shrink = len(pairs) / (len(pairs) + 20.0)
         return max(self.min_weight, min(self.max_weight, 1.0 + self.strength * corr * shrink))
 
 
 def apply_factor_weights(snapshot: PredictionSnapshot, weights: Mapping[str, float]) -> PredictionSnapshot:
-    if not weights: return snapshot
+    if not weights:
+        return snapshot
     adjusted = {name: score * weights.get(name, 1.0) for name, score in snapshot.factor_scores.items()}
     denominator = sum(abs(weights.get(name, 1.0)) for name in snapshot.factor_scores) or 1.0
     score = max(-100.0, min(100.0, sum(adjusted.values()) / denominator))
@@ -187,63 +203,94 @@ def validate_no_lookahead(snapshot: PredictionSnapshot, evidence_observed_at: Ma
         if observed is not None and _utc(observed) > _utc(snapshot.as_of):
             raise LeakageError(f"evidence {evidence_id} observed after prediction as_of")
     minimum = _utc(snapshot.as_of) + timedelta(days=HORIZON_DAYS[snapshot.horizon])
-    if _utc(outcome.observed_at) < minimum: raise LeakageError("outcome is inside the prediction horizon")
-    if outcome.ticker.upper() != snapshot.ticker.upper(): raise LeakageError("prediction/outcome ticker mismatch")
+    if _utc(outcome.observed_at) < minimum:
+        raise LeakageError("outcome is inside the prediction horizon")
+    if outcome.ticker.upper() != snapshot.ticker.upper():
+        raise LeakageError("prediction/outcome ticker mismatch")
 
 
 class WalkForwardValidator:
     def __init__(self, config: WalkForwardConfig | None = None, calibrator: FactorCalibrator | None = None) -> None:
-        self.config = config or WalkForwardConfig(); self.calibrator = calibrator or FactorCalibrator(min_observations=(config.min_factor_observations if config else 20))
+        self.config = config or WalkForwardConfig()
+        self.calibrator = calibrator or FactorCalibrator(min_observations=self.config.min_factor_observations)
 
     def run(self, snapshots: Sequence[PredictionSnapshot], outcomes: Sequence[OutcomeObservation]) -> ValidationResult:
-        ordered = sorted(snapshots, key=lambda x: _utc(x.as_of)); outcome_by_id = {o.prediction_id: o for o in outcomes}
+        ordered = sorted(snapshots, key=lambda x: _utc(x.as_of))
+        outcome_by_id = {o.prediction_id: o for o in outcomes}
         self._validate_pairs(ordered, outcome_by_id)
-        if not ordered: return _empty_result()
-        first, last = _utc(ordered[0].as_of), _utc(ordered[-1].as_of); cursor = first + timedelta(days=self.config.train_days)
-        evaluated: list[tuple[PredictionSnapshot, OutcomeObservation]] = []; fold_weights: list[Mapping[str, float]] = []
+        if not ordered:
+            return _empty_result()
+        first, last = _utc(ordered[0].as_of), _utc(ordered[-1].as_of)
+        cursor = first + timedelta(days=self.config.train_days)
+        evaluated: list[tuple[PredictionSnapshot, OutcomeObservation]] = []
+        latest_weights: Mapping[str, float] = {}
         while cursor <= last:
-            train_start = cursor - timedelta(days=self.config.train_days); test_end = cursor + timedelta(days=self.config.test_days)
+            train_start = cursor - timedelta(days=self.config.train_days)
+            test_end = cursor + timedelta(days=self.config.test_days)
             train = [s for s in ordered if train_start <= _utc(s.as_of) < cursor]
             test = [s for s in ordered if cursor <= _utc(s.as_of) < test_end]
             train_outcomes = [outcome_by_id[s.prediction_id] for s in train if s.prediction_id in outcome_by_id and _utc(outcome_by_id[s.prediction_id].observed_at) < cursor - timedelta(days=self.config.embargo_days)]
             if len(train_outcomes) >= self.config.min_train_observations:
-                weights = self.calibrator.fit(train, train_outcomes); fold_weights.append(weights)
+                weights = self.calibrator.fit(train, train_outcomes)
+                latest_weights = weights
                 evaluated.extend((apply_factor_weights(s, weights), outcome_by_id[s.prediction_id]) for s in test if s.prediction_id in outcome_by_id)
             cursor += timedelta(days=self.config.step_days)
-        return _metrics(evaluated, _average_weights(fold_weights))
+        return _metrics(evaluated, latest_weights)
 
     def _validate_pairs(self, snapshots: Sequence[PredictionSnapshot], outcomes: Mapping[str, OutcomeObservation]) -> None:
         for snapshot in snapshots:
-            if (outcome := outcomes.get(snapshot.prediction_id)) is not None: validate_no_lookahead(snapshot, {}, outcome)
+            if (outcome := outcomes.get(snapshot.prediction_id)) is not None:
+                validate_no_lookahead(snapshot, {}, outcome)
 
 
 def statistical_tests(pairs: Sequence[tuple[PredictionSnapshot, OutcomeObservation]], *, samples: int = 1000, seed: int = 42) -> StatisticalTestResult:
-    values = [o.excess_return for _, o in pairs]; n = len(values)
-    if not n: return StatisticalTestResult(0, 0., 0., 0., 0., 1., 0., 0., 1.)
-    baseline = 0.0; observed = mean(values); sd = _stdev(values); t = observed / (sd / math.sqrt(n)) if sd else 0.0
+    values = [o.excess_return for _, o in pairs]
+    n = len(values)
+    if not n:
+        return StatisticalTestResult(0, 0., 0., 0., 0., 1., 0., 0., 1.)
+    observed = mean(values)
+    sd = _stdev(values)
+    t = observed / (sd / math.sqrt(n)) if sd else 0.0
     p = 2.0 * (1.0 - _normal_cdf(abs(t))) if n > 1 else 1.0
-    rng = random.Random(seed); boot = [mean([rng.choice(values) for _ in values]) for _ in range(max(1, samples))]
-    boot.sort(); lo, hi = boot[int(.025 * len(boot))], boot[min(len(boot)-1, int(.975 * len(boot)))]
-    exceed = sum(abs(mean([rng.choice(values) for _ in values])) >= abs(observed) for _ in range(max(1, samples)))
-    return StatisticalTestResult(n, observed, baseline, observed - baseline, t, p, lo, hi, (exceed + 1) / (max(1, samples) + 1))
+    rng = random.Random(seed)
+    sample_count = max(1, samples)
+    boot = sorted(mean([rng.choice(values) for _ in values]) for _ in range(sample_count))
+    lo = boot[int(.025 * len(boot))]
+    hi = boot[min(len(boot) - 1, int(.975 * len(boot)))]
+    exceed = 0
+    for _ in range(sample_count):
+        shuffled = values[:]
+        rng.shuffle(shuffled)
+        if abs(mean(shuffled)) >= abs(observed):
+            exceed += 1
+    return StatisticalTestResult(n, observed, 0.0, observed, t, p, lo, hi, (exceed + 1) / (sample_count + 1))
 
 
 def baseline_comparison(pairs: Sequence[tuple[PredictionSnapshot, OutcomeObservation]]) -> dict[str, float]:
-    """Compare system returns with no-skill, long-only and score-sign baselines."""
-    if not pairs: return {"system_mean_excess": 0., "long_only_mean_excess": 0., "directional_hit_rate": 0.}
-    system = [o.excess_return for s, o in pairs]
+    if not pairs:
+        return {"system_mean_excess": 0., "long_only_mean_excess": 0., "directional_hit_rate": 0.}
+    system = [o.excess_return for _, o in pairs]
     long_only = [o.realized_return for _, o in pairs]
     hit = [1.0 if (s.score > 0 and o.excess_return > 0) or (s.score < 0 and o.excess_return < 0) else 0.0 for s, o in pairs if s.score != 0]
     return {"system_mean_excess": mean(system), "long_only_mean_excess": mean(long_only), "directional_hit_rate": mean(hit) if hit else 0.}
 
 
 def _metrics(pairs: Sequence[tuple[PredictionSnapshot, OutcomeObservation]], weights: Mapping[str, float]) -> ValidationResult:
-    if not pairs: return _empty_result(weights)
-    correct = 0; brier: list[float] = []; returns = [o.realized_return for _, o in pairs]; excess = [o.excess_return for _, o in pairs]; drawdowns = [o.max_drawdown for _, o in pairs]; by_action: dict[str, list[float]] = {}
+    if not pairs:
+        return _empty_result(weights)
+    correct = 0
+    brier: list[float] = []
+    returns = [o.realized_return for _, o in pairs]
+    excess = [o.excess_return for _, o in pairs]
+    drawdowns = [o.max_drawdown for _, o in pairs]
+    by_action: dict[str, list[float]] = {}
     for s, o in pairs:
-        direction = 1 if s.score > 0 else -1 if s.score < 0 else 0; actual = 1 if o.excess_return > 0 else -1 if o.excess_return < 0 else 0
+        direction = 1 if s.score > 0 else -1 if s.score < 0 else 0
+        actual = 1 if o.excess_return > 0 else -1 if o.excess_return < 0 else 0
         correct += direction == actual
-        probability = .5 + .5 * max(-1., min(1., s.score / 100.)); brier.append((probability - (1. if actual > 0 else 0.)) ** 2); by_action.setdefault(s.action, []).append(o.excess_return)
+        probability = .5 + .5 * max(-1., min(1., s.score / 100.))
+        brier.append((probability - (1. if actual > 0 else 0.)) ** 2)
+        by_action.setdefault(s.action, []).append(o.excess_return)
     return ValidationResult(len(pairs), len(pairs), correct / len(pairs), mean(excess), mean(returns), mean(drawdowns), mean(brier), abs(mean(s.confidence for s, _ in pairs) - correct / len(pairs)), {a: {"count": float(len(v)), "mean_excess_return": mean(v)} for a, v in by_action.items()}, dict(weights))
 
 
@@ -251,14 +298,16 @@ def _empty_result(weights: Mapping[str, float] | None = None) -> ValidationResul
     return ValidationResult(0, 0, 0., 0., 0., 0., 0., 0., {}, dict(weights or {}))
 
 
-def _average_weights(weights: Sequence[Mapping[str, float]]) -> dict[str, float]:
-    factors = {f for row in weights for f in row}; return {f: mean(row[f] for row in weights if f in row) for f in factors}
+def _normal_cdf(x: float) -> float:
+    return .5 * (1. + math.erf(x / math.sqrt(2.)))
 
 
-def _normal_cdf(x: float) -> float: return .5 * (1. + math.erf(x / math.sqrt(2.)))
+def _utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
-def _utc(value: datetime) -> datetime: return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 def _stdev(values: Sequence[float]) -> float:
-    if len(values) < 2: return 0.
-    m = mean(values); return math.sqrt(sum((v - m) ** 2 for v in values) / (len(values) - 1))
+    if len(values) < 2:
+        return 0.
+    m = mean(values)
+    return math.sqrt(sum((v - m) ** 2 for v in values) / (len(values) - 1))

@@ -60,6 +60,9 @@ class Evidence(BaseModel):
     horizon: Horizon = Horizon.MEDIUM
     tags: list[str] = Field(default_factory=list)
     facts: dict[str, Any] = Field(default_factory=dict)
+    entity: str | None = None
+    sector: str | None = None
+    affected_tickers: list[str] = Field(default_factory=list)
 
     @property
     def freshness(self) -> float:

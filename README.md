@@ -1,80 +1,71 @@
 # TradingAlgo
 
-A production-oriented, event-driven algorithmic trading platform for research, backtesting, paper trading, and controlled live execution.
+TradingAlgo is evolving into a **multi-source investment intelligence and advisory system**. It analyzes market structure, fundamentals, filings, technical charts, analyst revisions, sentiment, sector dynamics, company events, orders/contracts, litigation, M&A, macro and geopolitical developments before producing an evidence-backed advisory view.
 
-## Why Python
+It is **analysis-first, not order-execution-first**. The existing event-driven execution/risk boundaries remain isolated so research can mature without silently turning recommendations into trades.
 
-TradingAlgo uses Python as the strategy/research control plane. The architecture borrows proven patterns from mature open-source trading systems:
+## What the engine considers
 
-- **QuantConnect LEAN**: modular datafeed, transaction, realtime, setup, and result-processing boundaries.
-- **NautilusTrader**: deterministic event-driven design and a clean separation between strategy logic and execution infrastructure.
-- **Freqtrade**: practical dry-run, backtesting, persistence, risk controls, and strategy lifecycle.
+- Technical chart: trend, SMA/EMA, RSI, MACD, Bollinger, ATR, volume, support/resistance, relative strength and breakout structure.
+- Fundamentals: revenue/earnings growth, margins, FCF, balance sheet, dilution, valuation and earnings quality.
+- Analyst recommendations: rating changes, target revisions, estimate revisions and dispersion.
+- Market sentiment: news/social sentiment, breadth, volatility and positioning proxies.
+- Sector/industry: sector relative strength, earnings revisions, cycle and peer valuation.
+- Company events: earnings, guidance, orders, contracts, bookings, launches, management and capital allocation.
+- SEC/company filings: periodic filings, 8-K/material events, XBRL facts and insider filings where applicable.
+- Legal/regulatory: litigation, investigations, approvals, sanctions and enforcement.
+- M&A: acquisitions, divestitures, takeover signals, financing and integration risk.
+- Macro/geopolitical: rates, inflation, FX, commodities, tariffs, sanctions, conflicts, elections and supply-chain shocks mapped to affected sectors and companies.
 
-The project is intentionally not a fork of any of them. It keeps the useful architectural ideas while providing a smaller, broker-agnostic system that can evolve around equities, ETFs, options, and crypto.
+## Core principle
 
-## Safety first
+> No recommendation without evidence. No evidence without provenance. No high-conviction view without explicit downside and data-quality checks.
 
-The default mode is **paper**. Live trading is opt-in and requires explicit configuration. No API key is committed to the repository.
+The scoring layer is deliberately transparent. It exposes component signals, confidence, freshness, bull case, bear case and contradictions rather than hiding the decision inside an LLM prompt.
 
-The execution path includes:
-
-- pre-trade risk checks
-- max position and notional limits
-- daily loss limits
-- stale-data checks
-- duplicate/idempotency protection
-- order/position reconciliation
-- kill switch
-- audit events
-- paper/live separation
-
-Backtests are not treated as proof of live profitability. Slippage, spreads, latency, partial fills, rejected orders, market gaps, and data quality can materially change results.
-
-## Repository layout
+## Architecture
 
 ```text
-TradingAlgo/
-├── src/tradingalgo/
-│   ├── core/             # domain events, orders, positions, clock
-│   ├── data/             # market-data interfaces and implementations
-│   ├── execution/        # broker interfaces and paper/live adapters
-│   ├── risk/             # deterministic pre-trade and portfolio risk
-│   ├── strategy/         # strategy interfaces and examples
-│   ├── backtest/         # deterministic simulation
-│   ├── portfolio/        # portfolio state and reconciliation
-│   └── app.py            # CLI entry point
-├── tests/
-├── config/
-├── docs/
-└── .github/workflows/
+Sources / Licensed APIs / Public Filings / User Exports
+        |
+        v
+Source Adapters -> Canonical Evidence -> Research Store
+                                      |
+                                      v
+       +------------------------------+------------------------------+
+       |                              |                              |
+   Fundamentals                 Technicals                    Events/NLP
+       |                              |                              |
+       +---------------+--------------+---------------+--------------+
+                       v                              |
+                 Market + Sector Regime              |
+                       |                              |
+                       +---------- Signal Fusion ----+
+                                      |
+                                      v
+                         Bull / Bear / Contradiction
+                                      |
+                                      v
+                              Advisory + Report
+                                      |
+                                      v
+                       Outcome Tracking / Validation
 ```
 
-## Quick start
+## Architecture patterns adopted
 
-```bash
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-pytest
-python -m tradingalgo.app --mode paper
-```
+The project selectively adapts useful constructs from current open-source implementations: LEAN/NautilusTrader event boundaries; StockOracle-style multi-signal collectors and market-regime gating; EventEdge-style event-driven filings/insider/regulatory research; Siglens and AI Stock Insights style technical/news/fundamental fusion and human-readable reports; and DuckDB/Polars-style analytical storage and vectorized feature processing.
 
-## Operating modes
+These are design inspirations, not copied implementations or claims of predictive performance.
 
-- `backtest` — historical deterministic simulation
-- `paper` — live market data with simulated orders
-- `live` — real broker execution; disabled unless explicitly enabled
+## Data-source policy
 
-## Roadmap
+Source adapters must use official APIs, licensed providers, public filings, permitted RSS feeds, or user-provided exports. The system must not bypass access controls or terms of service. For example, Screener documents CSV export rather than an official API, while TradingView restricts non-display processing of its market data. Provider-specific adapters will therefore be pluggable and provenance-aware.
 
-1. Core event/order/risk contracts
-2. Deterministic backtest engine
-3. Paper broker and audit trail
-4. Market-data adapters
-5. Interactive Brokers execution adapter
-6. Portfolio reconciliation and recovery
-7. Strategy library and walk-forward evaluation
-8. Metrics, observability, dashboards and alerts
-9. ML/AI research layer with strict promotion gates
+## Current status
 
-See `docs/architecture.md` and `docs/progress.html` for the current design and implementation status.
+Batch 1 is complete: advisory domain contracts, technical indicators, signal fusion, market-regime foundation, source-policy documentation and incremental progress tracking are in place.
+
+Next: source adapters, SEC ingestion, research storage, event-impact mapping, analyst/sentiment aggregation, geopolitical exposure mapping, outcome tracking, validation and reporting/API.
+
+See `src/tradingalgo/intelligence/README.md` and `docs/progress.html`.

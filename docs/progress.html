@@ -4,15 +4,11 @@
 <h2>Batch 1 — Advisory architecture foundation — COMPLETE</h2>
 <ul><li>Canonical evidence, signals and advisory contracts.</li><li>Technical indicators and transparent scoring.</li><li>Market regime context and source-policy boundaries.</li><li>Open-source pattern review across event-driven research systems.</li></ul>
 <h2>Batch 2 — Multi-source intelligence ingestion — COMPLETE</h2>
-<ul>
-<li><strong>Done:</strong> provider adapters for Alpha Vantage, Finnhub, SEC EDGAR, FRED and GDELT.</li>
-<li><strong>Done:</strong> environment-based credentials and SEC User-Agent configuration.</li>
-<li><strong>Done:</strong> canonical quote, analyst-recommendation and news normalizers.</li>
-<li><strong>Done:</strong> technical snapshot with moving averages, RSI, momentum and realized volatility.</li>
-<li><strong>Done:</strong> normalization pipeline that isolates provider JSON from scoring.</li>
-<li><strong>Done:</strong> durable dependency-light JSONL evidence-store boundary for MVP persistence.</li>
-<li><strong>Done:</strong> unit tests covering quote, analyst, news and technical normalization.</li>
-</ul>
+<ul><li>Provider adapters for Alpha Vantage, Finnhub, SEC EDGAR, FRED and GDELT.</li><li>Environment credentials and SEC User-Agent configuration.</li><li>Canonical quote, analyst-recommendation and news normalizers.</li><li>Technical snapshot with moving averages, RSI, momentum and realized volatility.</li><li>Dependency-light evidence-store boundary and unit tests.</li></ul>
+<h2>Batch 3 — Build safety + technical signal boundary — COMPLETE</h2>
+<ul><li><strong>Done:</strong> declared the required HTTP client dependency and bumped package version to 0.2.1.</li><li><strong>Done:</strong> added an explainable technical-signal builder that converts deterministic technical snapshots into scored advisory signals.</li><li><strong>Done:</strong> added focused tests for long and short price histories.</li><li><strong>Done:</strong> added GitHub Actions CI for Python 3.11: compileall, pytest and Ruff.</li></ul>
+<h2>Next small batch</h2>
+<ol><li>Build a provider-fallback/health layer without changing scoring behavior.</li><li>Normalize Alpha Vantage/Finnhub historical OHLC payloads into one candle model.</li><li>Add MACD/Bollinger/ATR and volume-derived technical features with tests.</li><li>Then wire those features into the existing technical signal builder.</li></ol>
 <h2>Remaining</h2>
-<ol><li>Wire live ingestion orchestration and provider fallback/health scoring.</li><li>Add SEC filing/XBRL fundamentals normalization and event taxonomy.</li><li>Add sector-relative strength, market breadth and macro propagation.</li><li>Add geopolitical/legal/M&amp;A event extraction and ticker exposure mapping.</li><li>Add DuckDB/Polars analytical store and incremental refresh.</li><li>Add prediction/outcome tracking, walk-forward validation and leakage checks.</li><li>Add CLI/API advisory report surface and integration tests.</li></ol>
+<ol><li>SEC filing/XBRL fundamentals normalization and event taxonomy.</li><li>Sector-relative strength, market breadth and macro propagation.</li><li>Geopolitical/legal/M&amp;A event extraction and ticker exposure mapping.</li><li>DuckDB/Polars analytical store and incremental refresh.</li><li>Prediction/outcome tracking, walk-forward validation and leakage checks.</li><li>CLI/API advisory report surface and integration tests.</li></ol>
 </main></body></html>

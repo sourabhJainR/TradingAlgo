@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>TradingAlgo Progress</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body><main><h1>TradingAlgo implementation progress</h1>
+<h2>Batch 1 — Advisory architecture foundation</h2>
+<ul>
+<li><strong>Done:</strong> inspected current repository and retained the existing event/risk/execution boundaries.</li>
+<li><strong>Done:</strong> reviewed parallel open-source patterns: LEAN/NautilusTrader event boundaries, StockOracle multi-signal collection and regime gating, EventEdge event-driven filings, Siglens/AI Stock Insights research/report fusion, and DuckDB/Polars analytical pipelines.</li>
+<li><strong>Done:</strong> added canonical Evidence, Signal and Advisory contracts with provenance, freshness, confidence and horizon.</li>
+<li><strong>Done:</strong> added dependency-light technical indicators: SMA/EMA, RSI, MACD, Bollinger Bands, ATR and volume ratio.</li>
+<li><strong>Done:</strong> added transparent multi-signal scoring and contradiction handling.</li>
+<li><strong>Done:</strong> added market-regime classification using index trend, breadth and volatility context.</li>
+<li><strong>Done:</strong> documented the complete signal map: technicals, fundamentals, analyst recommendations, sentiment, sector, SEC/company filings, orders/contracts, litigation, M&amp;A, macro and geopolitical events.</li>
+<li><strong>Done:</strong> documented source-policy boundaries for Screener and TradingView and the requirement to use permitted/licensed interfaces or user exports.</li>
+</ul>
+<h2>Next batch</h2>
+<ol><li>Build source-adapter contracts and SEC ingestion.</li><li>Add market/news/analyst/sector/event adapters with provenance.</li><li>Add DuckDB/Polars research store and incremental refresh.</li><li>Add event-impact engine, chart snapshots and sector-relative strength.</li><li>Add analyst-revision and sentiment aggregation.</li><li>Add geopolitical event taxonomy and sector/ticker exposure mapping.</li><li>Add backtestable advisory outcome tracking and walk-forward validation.</li><li>Add API/reporting surface and tests.</li></ol>
+</main></body></html>

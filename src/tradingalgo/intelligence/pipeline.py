@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from .fundamentals import normalize_companyfacts
@@ -16,15 +17,25 @@ class IngestResult:
     provider_errors: dict[str, str]
 
 
+def _filing_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
 def _financial_evidence(ticker: str, payload: dict[str, Any]) -> list[Evidence]:
     facts = normalize_companyfacts(ticker, payload)
+    observed = datetime.now(timezone.utc)
     return [Evidence(
         id=f"sec:xbrl:{fact.ticker}:{fact.concept}:{fact.period_end}:{fact.accession or 'unknown'}",
         ticker=fact.ticker,
         source_type=SourceType.SEC_FILING,
         source_name="sec_edgar",
-        observed_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
-        published_at=__import__("datetime").datetime.fromisoformat(fact.filing_date).replace(tzinfo=__import__("datetime").timezone.utc) if fact.filing_date else None,
+        observed_at=observed,
+        published_at=_filing_datetime(fact.filing_date),
         title=f"SEC XBRL {fact.concept}",
         summary=f"{fact.concept}={fact.value} {fact.unit} for period ending {fact.period_end}",
         polarity=Polarity.NEUTRAL,

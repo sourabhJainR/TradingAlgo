@@ -76,11 +76,17 @@ class IntelligenceOrchestrator:
                 continue
             provider, response = result
             selected[channel] = provider
-            key = provider if channel == "quote" else f"{provider}_{channel}"
+            if channel == "quote":
+                key = provider
+            elif channel == "sec":
+                key = "sec_edgar_companyfacts"
+            elif channel == "fred":
+                key = "fred"
+            else:
+                key = f"{provider}_{channel}"
             payload = response.payload
-            if channel == "fred":
-                # FRED's response does not echo series_id, so callers can bind it to the payload.
-                payload = dict(payload) if isinstance(payload, dict) else payload
+            if channel == "fred" and isinstance(payload, dict):
+                payload = dict(payload)
             payloads[key] = payload
 
         normalized = normalize_provider_payloads(ticker, payloads)

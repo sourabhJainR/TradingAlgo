@@ -1,20 +1,6 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>TradingAlgo Progress</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body><main><h1>TradingAlgo implementation progress</h1>
-<h2>Batch 1 — Advisory architecture foundation — COMPLETE</h2>
-<ul><li>Canonical evidence, signals and advisory contracts.</li><li>Technical indicators and transparent scoring.</li><li>Market regime context and source-policy boundaries.</li><li>Open-source pattern review across event-driven research systems.</li></ul>
-<h2>Batch 2 — Multi-source intelligence ingestion — COMPLETE</h2>
-<ul><li>Provider adapters for Alpha Vantage, Finnhub, SEC EDGAR, FRED and GDELT.</li><li>Environment credentials and SEC User-Agent configuration.</li><li>Canonical quote, analyst-recommendation and news normalizers.</li><li>Technical snapshot with moving averages, RSI, momentum and realized volatility.</li><li>Dependency-light evidence-store boundary and unit tests.</li></ul>
-<h2>Batch 3 — Build safety + technical signal boundary — COMPLETE</h2>
-<ul><li>HTTP dependency declared; package version 0.2.1.</li><li>Explainable technical-signal builder and focused tests.</li><li>GitHub Actions CI for compileall, pytest and Ruff.</li></ul>
-<h2>Batch 4 — Provider resilience + canonical candles — COMPLETE</h2>
-<ul><li>Provider health tracking and recovery state.</li><li>Bounded exponential retry with jitter for transient failures.</li><li>Canonical OHLCV Candle model with Alpha Vantage/Finnhub adapters.</li><li>Focused candle and health tests.</li></ul>
-<h2>Batch 5 — Fundamentals + event taxonomy foundation — COMPLETE</h2>
-<ul><li><strong>Done:</strong> SEC Company Facts/XBRL normalization into typed financial facts.</li><li><strong>Done:</strong> deterministic event taxonomy covering earnings, guidance, M&amp;A, litigation, regulation, contracts/orders, financing, capital return, leadership, product, supply chain, geopolitical and macro events.</li><li><strong>Done:</strong> focused normalization and taxonomy tests.</li></ul>
-<h2>Target intelligence flow</h2>
-<p>Providers → health/fallback → ingestion → SEC/XBRL fundamentals → technicals → analyst revisions → news/sentiment → macro/sector → geopolitical/legal/M&amp;A → evidence store → transparent advisory</p>
-<h2>Next small batch</h2>
-<ol><li>Add sector-relative strength and market breadth.</li><li>Add FRED macro normalization and sector exposure mapping.</li><li>Add event enrichment into canonical Evidence.</li><li>Keep compile/test/lint gates before proceeding.</li></ol>
-<h2>Remaining</h2>
-<ol><li>DuckDB/Polars analytical store and incremental refresh.</li><li>Prediction/outcome tracking, walk-forward validation and leakage checks.</li><li>Live orchestration and provider fallback across all intelligence channels.</li><li>CLI/API advisory report surface and integration tests.</li></ol>
-</main></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>TradingAlgo Progress</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><main><h1>TradingAlgo implementation progress</h1>
+<h2>Batches 1-5 — COMPLETE</h2><ul><li>Advisory contracts, source policy, transparent scoring and market regime.</li><li>Alpha Vantage, Finnhub, SEC, FRED and GDELT provider boundaries.</li><li>Canonical evidence, quotes, analyst/news normalization and OHLCV candles.</li><li>Provider health, bounded retries and technical signal boundary.</li><li>SEC/XBRL financial facts and deterministic event taxonomy.</li></ul>
+<h2>Batch 6 — Advanced technicals + market context — COMPLETE</h2><ul><li><strong>Done:</strong> MACD line, signal and histogram.</li><li><strong>Done:</strong> Bollinger mid/upper/lower bands and normalized price position.</li><li><strong>Done:</strong> ATR14 using true range.</li><li><strong>Done:</strong> 20-session volume ratio.</li><li><strong>Done:</strong> advanced features wired into the existing technical signal contract without changing Signal fields.</li><li><strong>Done:</strong> sector-relative strength, market breadth and FRED normalization foundations.</li><li><strong>Done:</strong> deterministic market-context and macro tests.</li></ul>
+<h2>Target intelligence flow</h2><p>Providers → health/fallback → ingestion → SEC/XBRL fundamentals → technicals → analyst revisions → news/sentiment → macro/sector → geopolitical/legal/M&amp;A → evidence store → transparent advisory</p>
+<h2>Next phase</h2><ol><li>Build end-to-end ingestion orchestration with provider fallback and health gating.</li><li>Enrich analyst revisions and news into canonical Evidence.</li><li>Map geopolitical/legal/M&amp;A events to ticker and sector exposure.</li><li>Introduce DuckDB/Polars analytical persistence and incremental refresh.</li><li>Compose all evidence into transparent multi-factor advisory output.</li></ol>
+<h2>Remaining</h2><ol><li>Prediction/outcome tracking, walk-forward validation and leakage checks.</li><li>CLI/API advisory report surface and integration tests.</li><li>Live provider configuration/entitlement validation.</li></ol></main></body></html>

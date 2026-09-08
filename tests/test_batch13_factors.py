@@ -24,7 +24,7 @@ def test_fundamental_factor_uses_only_facts_available_as_of():
         fact("CashAndCashEquivalentsAtCarryingValue", 50, "2025-12-31", "2026-02-01"),
     ]
     signals = build_fundamental_factors("AAA", evidence,
-        as_of=datetime(2026, 04, 01, tzinfo=timezone.utc))
+        as_of=datetime(2026, 4, 1, tzinfo=timezone.utc))
     assert signals
     assert all("2026-06-30" not in item.evidence_ids for item in signals)
     quality = next(item for item in signals if item.name == "fundamental_quality")

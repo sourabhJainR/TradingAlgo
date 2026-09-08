@@ -6,8 +6,9 @@ from datetime import date
 from typing import Callable, Sequence
 
 from ..data.candles import Candle
-from .learning import PredictionSnapshot, statistical_tests
+from .learning import PredictionSnapshot
 from .outcomes import PriceOutcome, realize_price_outcome
+from .validation_stats import StatisticalSummary, summarize
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ class BacktestReport:
     max_drawdown: float
     average_adverse_excursion: float
     average_favorable_excursion: float
-    statistical_test: object
+    statistical_test: StatisticalSummary
     skipped: int
 
 
@@ -104,16 +105,15 @@ def _report(ticker: str, trades: Sequence[BacktestTrade], skipped: int) -> Backt
         equity *= 1.0 + value
         peak = max(peak, equity)
         max_dd = max(max_dd, (peak - equity) / peak)
-    pairs = [(t.prediction, t.outcome.observation) for t in trades]
     return BacktestReport(
         ticker=ticker.upper(), observations=len(trades), trades=len(trades),
         mean_return=sum(returns) / len(returns), mean_excess_return=sum(excess) / len(excess),
         hit_rate=wins / len(returns), cumulative_return=equity - 1.0, max_drawdown=max_dd,
         average_adverse_excursion=sum(t.outcome.maximum_adverse_excursion for t in trades) / len(trades),
         average_favorable_excursion=sum(t.outcome.maximum_favorable_excursion for t in trades) / len(trades),
-        statistical_test=statistical_tests(pairs), skipped=max(0, skipped),
+        statistical_test=summarize(excess), skipped=max(0, skipped),
     )
 
 
 def _empty(ticker: str, skipped: int = 0) -> BacktestReport:
-    return BacktestReport(ticker.upper(), 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, statistical_tests([]), skipped)
+    return BacktestReport(ticker.upper(), 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, summarize([]), skipped)

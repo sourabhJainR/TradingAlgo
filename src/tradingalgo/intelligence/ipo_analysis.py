@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from .models import Evidence, Polarity, SourceType
@@ -45,6 +46,13 @@ class IPOScore:
     evidence_ids: tuple[str, ...]
 
 
+_WEIGHTS = {
+    "revenue_growth": .22, "operating_margin": .12, "free_cash_flow_margin": .12,
+    "cash_vs_debt": .14, "dilution": .08, "customer_concentration": .06,
+    "use_of_proceeds": .08, "public_record_risk": .18,
+}
+
+
 def build_ipo_profile(ticker: str, company_name: str, records: Mapping[str, Any], evidence: Sequence[Evidence] = ()) -> IPOProfile:
     """Normalize prospectus/filing/public-record facts without inventing missing values."""
     def num(key: str) -> float | None:
@@ -72,29 +80,28 @@ def analyze_ipo(profile: IPOProfile, evidence: Sequence[Evidence] = ()) -> IPOSc
     strengths: list[str] = []
     risks: list[str] = []
     missing: list[str] = []
-    components: list[float] = []
+    scored: dict[str, tuple[float, float]] = {}
 
-    def add(name: str, value: float | None, weight: float) -> None:
+    def add(name: str, value: float | None) -> None:
         if value is None:
             missing.append(name)
         else:
-            components.append(value * weight)
+            scored[name] = (value, _WEIGHTS[name])
 
-    growth = _bounded((profile.revenue_growth or 0.0) / 0.50, -1.0, 1.0) if profile.revenue_growth is not None else None
-    margin = _bounded((profile.operating_margin or 0.0) / 0.25, -1.0, 1.0) if profile.operating_margin is not None else None
-    fcf = _bounded((profile.free_cash_flow_margin or 0.0) / 0.20, -1.0, 1.0) if profile.free_cash_flow_margin is not None else None
+    growth = _bounded(profile.revenue_growth / .50, -1.0, 1.0) if profile.revenue_growth is not None else None
+    margin = _bounded(profile.operating_margin / .25, -1.0, 1.0) if profile.operating_margin is not None else None
+    fcf = _bounded(profile.free_cash_flow_margin / .20, -1.0, 1.0) if profile.free_cash_flow_margin is not None else None
     balance = None if profile.cash is None or profile.debt is None else _bounded((profile.cash - profile.debt) / max(profile.cash + profile.debt, 1.0), -1.0, 1.0)
     dilution = None if profile.dilution_pct is None else _bounded(1.0 - profile.dilution_pct / 100.0, -1.0, 1.0)
     concentration = None if profile.customer_concentration_pct is None else _bounded(1.0 - profile.customer_concentration_pct / 100.0, -1.0, 1.0)
-
-    add("revenue_growth", growth, .22); add("operating_margin", margin, .12); add("free_cash_flow_margin", fcf, .12)
-    add("cash_vs_debt", balance, .14); add("dilution", dilution, .08); add("customer_concentration", concentration, .06)
-    add("use_of_proceeds", _bounded(2 * profile.use_of_proceeds_quality - 1, -1, 1), .08)
+    add("revenue_growth", growth); add("operating_margin", margin); add("free_cash_flow_margin", fcf)
+    add("cash_vs_debt", balance); add("dilution", dilution); add("customer_concentration", concentration)
+    add("use_of_proceeds", _bounded(2 * profile.use_of_proceeds_quality - 1, -1, 1))
     risk = _bounded((profile.related_party_risk + profile.litigation_risk + profile.regulatory_risk + profile.governance_risk) / 4, 0, 1)
-    add("public_record_risk", 1 - 2 * risk, .18)
+    add("public_record_risk", 1 - 2 * risk)
 
-    score = 50.0 if not components else 50.0 + 50.0 * sum(components) / sum((.22,.12,.12,.14,.08,.06,.08,.18)[i] for i in range(len(components)))
-    score = max(0.0, min(100.0, score))
+    denominator = sum(weight for _, weight in scored.values())
+    score = 50.0 if not scored else max(0.0, min(100.0, 50.0 + 50.0 * sum(value * weight for value, weight in scored.values()) / denominator))
     if growth is not None and growth > .4: strengths.append("strong reported revenue growth")
     if margin is not None and margin > .2: strengths.append("positive operating economics")
     if fcf is not None and fcf > .1: strengths.append("positive free cash flow profile")
@@ -102,9 +109,8 @@ def analyze_ipo(profile: IPOProfile, evidence: Sequence[Evidence] = ()) -> IPOSc
     if risk > .4: risks.append("elevated legal, regulatory, related-party or governance risk")
     if concentration is not None and concentration < .5: risks.append("high customer concentration")
     if dilution is not None and dilution < .6: risks.append("material dilution")
-    if not missing: missing = []
-    coverage = len(components) / 8.0
-    confidence = min(1.0, .25 + .65 * coverage + .10 * profile.source_quality)
+    coverage = denominator / sum(_WEIGHTS.values())
+    confidence = min(1.0, .20 + .70 * coverage + .10 * profile.source_quality)
     verdict = "STRONG" if score >= 70 else "SELECTIVE" if score >= 55 else "AVOID" if score < 40 else "WATCH"
     return IPOScore(profile.ticker, score, confidence, verdict, tuple(strengths), tuple(risks), tuple(missing), profile.evidence_ids)
 
@@ -118,11 +124,13 @@ def public_record_evidence(ticker: str, records: Mapping[str, Any]) -> list[Evid
         ("governance_risk", Polarity.BEARISH, .7, "Public-record governance risk flag"),
     ):
         value = records.get(key)
-        if value is not None and float(value) > 0:
+        try: numeric = float(value) if value is not None else 0.0
+        except (TypeError, ValueError): numeric = 0.0
+        if numeric > 0:
             out.append(Evidence(id=f"ipo-{ticker.lower()}-{key}", ticker=ticker.upper(), source_type=SourceType.COMPANY_FILING,
-                source_name="public_record", observed_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
-                title=summary, summary=f"{summary}: {float(value):.2f}", polarity=polarity, severity=severity,
-                confidence=.7, novelty=.8, tags=["ipo", "public_record", key]))
+                source_name="public_record", observed_at=datetime.now(timezone.utc), title=summary,
+                summary=f"{summary}: {numeric:.2f}", polarity=polarity, severity=severity, confidence=.7,
+                novelty=.8, tags=["ipo", "public_record", key]))
     return out
 
 

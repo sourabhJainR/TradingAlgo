@@ -6,7 +6,7 @@ from datetime import date
 from typing import Callable, Sequence
 
 from ..data.candles import Candle
-from .learning import OutcomeObservation, PredictionSnapshot, statistical_tests
+from .learning import PredictionSnapshot, statistical_tests
 from .outcomes import PriceOutcome, realize_price_outcome
 
 
@@ -14,6 +14,7 @@ from .outcomes import PriceOutcome, realize_price_outcome
 class BacktestConfig:
     warmup_sessions: int = 200
     rebalance_every_sessions: int = 1
+    allow_overlapping_positions: bool = False
     benchmark_required: bool = False
     transaction_cost_bps: float = 10.0
 
@@ -63,23 +64,31 @@ def run_backtest(
         return _empty(ticker)
     trades: list[BacktestTrade] = []
     last_prediction_index = -cfg.rebalance_every_sessions
+    active_until: date | None = None
+    skipped = 0
     for index in range(cfg.warmup_sessions, len(ordered)):
         if index - last_prediction_index < cfg.rebalance_every_sessions:
             continue
         as_of = ordered[index].session
+        if not cfg.allow_overlapping_positions and active_until is not None and as_of <= active_until:
+            skipped += 1
+            continue
         prefix = ordered[: index + 1]
         prediction = predictor(as_of, prefix)
         last_prediction_index = index
         if prediction is None or prediction.ticker.upper() != ticker.upper() or prediction.as_of.date() > as_of:
+            skipped += 1
             continue
         try:
             outcome = realize_price_outcome(prediction, ordered, benchmark_candles)
         except (ValueError, KeyError):
+            skipped += 1
             continue
+        active_until = outcome.exit_session
         gross = outcome.observation.realized_return
         cost = (2.0 * cfg.transaction_cost_bps) / 10000.0
-        trades.append(BacktestTrade(prediction, outcome, gross - cost if gross >= 0 else gross - cost))
-    return _report(ticker, trades, len(ordered) - cfg.warmup_sessions - len(trades))
+        trades.append(BacktestTrade(prediction, outcome, gross - cost))
+    return _report(ticker, trades, skipped)
 
 
 def _report(ticker: str, trades: Sequence[BacktestTrade], skipped: int) -> BacktestReport:

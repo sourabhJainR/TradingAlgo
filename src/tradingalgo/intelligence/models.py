@@ -23,6 +23,7 @@ class SourceType(StrEnum):
     MACRO = "macro"
     GEOPOLITICAL = "geopolitical"
     LEGAL = "legal"
+    REGULATORY = "regulatory"
     M_AND_A = "m_and_a"
     ORDER_BOOK = "order_book"
     ALTERNATIVE = "alternative"

@@ -20,7 +20,7 @@ def market_context(index_close: float, index_sma200: float | None,
     total = advancing + declining
     breadth = 100.0 * advancing / total if total else 50.0
     relative = sector_return - market_return
-    return MarketContext(index_vs_200, breadth, volatility_z, relative, max(-1.0, min(1.0, macro_bias)))
+    return MarketContext(round(index_vs_200, 10), round(breadth, 10), volatility_z, relative, max(-1.0, min(1.0, macro_bias)))
 
 
 def sector_signal(relative_strength: float) -> float:

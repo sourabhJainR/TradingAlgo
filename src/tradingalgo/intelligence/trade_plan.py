@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ..data.providers import ProviderResponse
 from ..technical.indicators import atr, technical_snapshot
 
 
@@ -36,7 +37,6 @@ def build_trade_plan(ticker: str, candles: pd.DataFrame, *, horizon: str = "medi
     frame = _normalize_candles(candles)
     if len(frame) < 50:
         raise ValueError("at least 50 OHLCV rows are required for a trade plan")
-
     snapshot = technical_snapshot(frame)
     price = float(frame["close"].iloc[-1])
     atr_value = float(atr(frame["high"], frame["low"], frame["close"]).iloc[-1])
@@ -46,12 +46,10 @@ def build_trade_plan(ticker: str, candles: pd.DataFrame, *, horizon: str = "medi
     if not np.isfinite(atr_value) or atr_value <= 0:
         raise ValueError("ATR is unavailable for the supplied history")
 
-    # Enter near support while allowing a small amount of price discovery.
     low = max(recent_low, min(price, sma20) - 0.5 * atr_value)
     high = min(price + 0.25 * atr_value, sma20 + 0.75 * atr_value)
     if high < low:
         low, high = min(price, sma20), max(price, sma20)
-
     stop = max(0.01, low - 1.5 * atr_value)
     risk = max(0.01, high - stop)
     target1 = high + risk
@@ -64,7 +62,6 @@ def build_trade_plan(ticker: str, candles: pd.DataFrame, *, horizon: str = "medi
         f"technical signals remain intact over the {horizon} horizon."
     )
     invalidation = f"Invalidate the setup below {stop:.2f} or if the supporting trend evidence materially reverses."
-
     return TradePlan(
         ticker=ticker.upper(), current_price=price,
         buy_range_low=round(low, 4), buy_range_high=round(high, 4),
@@ -77,17 +74,48 @@ def build_trade_plan(ticker: str, candles: pd.DataFrame, *, horizon: str = "medi
     )
 
 
+def candles_from_provider(response: ProviderResponse) -> pd.DataFrame:
+    """Normalize Twelve Data or Alpha Vantage time-series payloads to OHLCV."""
+    payload = response.payload
+    rows: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        values = payload.get("values")
+        if isinstance(values, list):
+            rows = [row for row in values if isinstance(row, dict)]
+        else:
+            for key, value in payload.items():
+                if isinstance(value, dict) and str(key).lower().startswith("time series"):
+                    rows = [dict(row, datetime=date) for date, row in value.items() if isinstance(row, dict)]
+                    break
+    elif isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+    if not rows:
+        raise ValueError("provider response contains no OHLCV rows")
+    frame = pd.DataFrame(rows)
+    rename = {str(column).lower().replace(" ", "_"): str(column).lower().replace(" ", "_") for column in frame.columns}
+    frame = frame.rename(columns=rename)
+    aliases = {
+        "datetime": "date", "date": "date", "timestamp": "date",
+        "open": "open", "1._open": "open", "high": "high", "2._high": "high",
+        "low": "low", "3._low": "low", "close": "close", "4._close": "close",
+        "volume": "volume", "5._volume": "volume",
+    }
+    frame = frame.rename(columns={column: aliases[column] for column in frame.columns if column in aliases})
+    if "date" in frame.columns:
+        frame = frame.set_index("date")
+    return _normalize_candles(frame)
+
+
 def _normalize_candles(candles: pd.DataFrame) -> pd.DataFrame:
-    aliases = {"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"}
-    frame = candles.rename(columns={str(c).lower().strip(): aliases.get(str(c).lower().strip(), c) for c in candles.columns}).copy()
-    required = set(aliases)
+    frame = candles.copy()
+    frame.columns = [str(column).lower().strip().replace(" ", "_") for column in frame.columns]
+    required = {"open", "high", "low", "close", "volume"}
     missing = required.difference(frame.columns)
     if missing:
         raise ValueError(f"Missing OHLCV columns: {sorted(missing)}")
     for column in required:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = frame.dropna(subset=list(required)).sort_index()
-    return frame
+    return frame.dropna(subset=list(required)).sort_index()
 
 
 def _basis(snapshot: dict[str, float], price: float, sma20: float, recent_high: float, recent_low: float) -> list[str]:

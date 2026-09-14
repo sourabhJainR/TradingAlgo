@@ -17,12 +17,6 @@ Screen a user-supplied universe using transparent conditions:
 - maximum drawdown
 - 20-day breakout-only mode
 
-Example:
-
-```text
-/api/screen?tickers=NVDA,MSFT,AVGO,AMD&market=US&horizon=short&min_score=60&max_rsi=70&breakout_only=true
-```
-
 ### Backtesting
 
 `GET /api/backtest`
@@ -58,6 +52,29 @@ The service reports:
 
 It does not rebalance or place orders.
 
+### Zerodha read-only connector
+
+`GET /api/portfolio/broker?broker=zerodha`
+
+The Zerodha connector reads holdings from Kite Connect using server-side environment variables:
+
+```text
+ZERODHA_API_KEY=...
+ZERODHA_ACCESS_TOKEN=...
+```
+
+The connector normalizes quantity, T+1 quantity and MTF quantity, then preserves average price, last price, invested value, current value and P&L before running the normal portfolio diagnostics.
+
+No order, trade, or account mutation endpoint is exposed.
+
+### INDmoney and Excel/CSV import
+
+`POST /api/portfolio/import`
+
+Upload `.xlsx`, `.xls` or `.csv` files. Select `INDmoney` when importing an INDmoney statement; otherwise select generic Excel/CSV. Common column names are normalized automatically, including Symbol/Security, Quantity, Average Price, LTP, Current Value and P&L.
+
+This is intentionally file-based rather than screen-scraping or automating an INDmoney login. It works with exported statements and keeps the analysis local/read-only. The same importer can accept statements from other brokers.
+
 ### Deterministic alerts
 
 `GET /api/alerts?ticker=NVDA&market=US&horizon=short`
@@ -75,48 +92,16 @@ These are explainable signal flags, not price predictions.
 
 `GET /api/pulse`
 
-Summarizes the analyzed discovery sample into:
-
-- BUY/WATCH/AVOID counts
-- BUY percentage
-- average score
-- average confidence
-- breakout count
+Summarizes the analyzed discovery sample into BUY/WATCH/AVOID counts, BUY percentage, average score, average confidence and breakout count.
 
 The response explicitly identifies that this is a discovery sample rather than a claim about the entire exchange.
 
-## Open-source patterns incorporated
-
-The design was informed by recurring capabilities in open-source projects such as:
-
-- full-market technical scanning and custom rule screening
-- paper-portfolio diagnostics
-- strategy backtesting and risk metrics
-- market breadth and regime views
-- sector/relative-strength research
-- transparent multi-factor ranking
-- deterministic alerts
-- natural-language research interfaces as a future extension
-
-Examples reviewed included Stock Analyzer, Open-Papertrade, NSE Stock Scanner, AlphaForge, Quantitative Investing Assistant and other open-source research platforms.
-
-The implementation is independently structured for TradingAlgo and does not copy their code.
-
 ## Dependency boundary
 
-No paid service is required for these features.
-
-- US historical backtests: public Stooq CSV
-- India historical backtests: public NSE historical endpoint
-- Individual analysis: existing provider hierarchy
-- Portfolio/screener/alerts: local deterministic computation
-- No broker connection
-- No order execution
-
-Optional provider credentials remain optional where supported by the existing application.
+No paid service is required for Excel/CSV import or local portfolio diagnostics. Zerodha live holdings require a Kite Connect application and access token supplied by the user; the application does not embed credentials or provide execution.
 
 ## Safety boundary
 
-Backtests are historical simulations. They do not guarantee future performance. Results should be interpreted together with data quality, transaction costs, taxes, liquidity and market-regime changes.
+Broker connectors are read-only. Backtests are historical simulations and do not guarantee future performance. Results should be interpreted together with data quality, transaction costs, taxes, liquidity and market-regime changes.
 
 TradingAlgo remains research/advisory-only.

@@ -16,6 +16,8 @@ class DiscoveryPolicy:
     min_dollar_volume: float = 2_000_000.0
     min_evidence: int = 3
     min_score: float = 35.0
+    min_sector_relative_strength: float = 35.0
+    min_market_regime: float = 35.0
 
 
 SHORT_WEIGHTS = {
@@ -72,12 +74,14 @@ def _evidence_count(row: dict[str, Any]) -> int:
 
 
 def passes_filters(row: dict[str, Any], policy: DiscoveryPolicy) -> tuple[bool, list[str]]:
-    """Apply hard quality filters only when the provider supplies the inputs."""
+    """Apply hard quality filters without inventing missing provider data."""
     reasons: list[str] = []
     price = _number(row, "price", "last_price")
     avg_volume = _number(row, "avg_volume", "average_volume", "volume")
     dollar_volume = _number(row, "dollar_volume", "avg_dollar_volume")
     evidence = _evidence_count(row)
+    sector_relative = _number(row, "sector_relative_strength", "relative_strength", default=50.0)
+    regime = _number(row, "market_regime", "regime_score", default=50.0)
 
     if price and not (policy.min_price <= price <= policy.max_price):
         reasons.append("price filter")
@@ -87,9 +91,13 @@ def passes_filters(row: dict[str, Any], policy: DiscoveryPolicy) -> tuple[bool, 
         reasons.append("dollar-volume filter")
     if evidence < policy.min_evidence:
         reasons.append("minimum evidence filter")
+    if row.get("sector_relative_strength") not in (None, "") or row.get("relative_strength") not in (None, ""):
+        if sector_relative < policy.min_sector_relative_strength:
+            reasons.append("sector-relative-strength filter")
+    if row.get("market_regime") not in (None, "") or row.get("regime_score") not in (None, ""):
+        if regime < policy.min_market_regime:
+            reasons.append("market-regime filter")
 
-    # If price/volume are absent, evidence remains the controlling gate rather
-    # than inventing liquidity data from a provider catalog.
     return not reasons, reasons
 
 

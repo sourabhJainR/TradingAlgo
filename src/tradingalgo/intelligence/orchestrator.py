@@ -16,6 +16,7 @@ from .event_exposure import event_to_evidence
 from .exposure import ExposureMap
 from .factor_engine import build_fundamental_factors, build_valuation_signal
 from .learning import LearningStore, PredictionSnapshot, prediction_id_for
+from .market_scanner import DiscoveryResult, MarketCandidate, MarketDiscovery
 from .models import Advisory, Evidence, Horizon, Signal
 from .outcomes import PriceOutcome, realize_price_outcome
 from .persistent_store import SQLiteEvidenceStore
@@ -38,6 +39,21 @@ class OrchestrationResult:
     provider_errors: dict[str, str]
     selected_providers: dict[str, str]
     prediction: PredictionSnapshot
+
+
+@dataclass(frozen=True)
+class MarketRecommendation:
+    candidate: MarketCandidate
+    analysis: OrchestrationResult
+
+
+@dataclass(frozen=True)
+class MarketRecommendationResult:
+    """Shortlist plus full evidence-backed analyses for an open-ended request."""
+
+    discovery: DiscoveryResult
+    recommendations: tuple[MarketRecommendation, ...]
+    errors: dict[str, str]
 
 
 class IntelligenceOrchestrator:
@@ -124,6 +140,63 @@ class IntelligenceOrchestrator:
             self.learning.save_prediction(prediction)
         return OrchestrationResult(ticker=ticker.upper(), evidence=tuple(evidence), signals=tuple(signals), bundle=bundle,
             advisory=advisory, provider_errors=errors, selected_providers=selected, prediction=prediction)
+
+    def recommend_market(
+        self,
+        universe: FetchCandidate,
+        *,
+        analysis_fetchers: Callable[[str], dict[str, list[FetchCandidate]]] | None = None,
+        market: str = "global",
+        shortlist: int = 10,
+        recommendations: int = 5,
+        horizon: Horizon = Horizon.MEDIUM,
+        as_of: datetime | None = None,
+    ) -> MarketRecommendationResult:
+        """Discover, rank, then fully analyze the strongest market candidates.
+
+        The universe provider is the only source of symbols. No ticker is
+        invented when discovery is unavailable. Full analysis happens only
+        after the transparent pre-screen, preventing an LLM or presentation
+        layer from selecting names without evidence.
+        """
+        discovery = MarketDiscovery(self.health).discover(
+            universe.fetch,
+            provider=universe.provider,
+            market=market,
+            limit=shortlist,
+            as_of=as_of,
+        )
+        errors = dict(discovery.errors)
+        analyzed: list[MarketRecommendation] = []
+        for candidate in discovery.candidates:
+            try:
+                fetchers = analysis_fetchers(candidate.ticker) if analysis_fetchers else {}
+                analysis = self.collect(
+                    candidate.ticker,
+                    quote=fetchers.get("quote"),
+                    analyst=fetchers.get("analyst"),
+                    news=fetchers.get("news"),
+                    sec=fetchers.get("sec"),
+                    fred=fetchers.get("fred"),
+                    events=fetchers.get("events"),
+                    horizon=horizon,
+                    as_of=as_of or discovery.as_of,
+                )
+                analyzed.append(MarketRecommendation(candidate, analysis))
+            except Exception as exc:
+                errors[candidate.ticker] = str(exc)
+
+        # Do not expose the discovery rank as the final recommendation rank.
+        # Final ordering requires the full advisory score and confidence.
+        analyzed.sort(
+            key=lambda item: (
+                item.analysis.advisory.score * item.analysis.advisory.confidence,
+                item.analysis.advisory.confidence,
+                item.candidate.score,
+            ),
+            reverse=True,
+        )
+        return MarketRecommendationResult(discovery, tuple(analyzed[:recommendations]), errors)
 
     def realize_prediction(self, prediction: PredictionSnapshot, candles: Sequence[Candle],
                            benchmark_candles: Sequence[Candle] | None = None) -> PriceOutcome:

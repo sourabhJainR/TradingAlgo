@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-
 from .fundamentals import normalize_companyfacts
 from .macro import macro_evidence, normalize_fred
 from .models import Evidence, Horizon, Polarity, SourceType

@@ -11,6 +11,8 @@ from tradingalgo.intelligence.market_scanner import MarketDiscovery
 
 from .research_service import StockAnalysis, analyze_stock
 
+MIN_EVIDENCE_SOURCES = 2
+
 
 @dataclass(frozen=True)
 class MarketRecommendations:
@@ -31,12 +33,15 @@ def recommend_market(
     recommendations: int = 5,
     config: SourceConfig | None = None,
 ) -> MarketRecommendations:
-    """Discover candidates first, fully analyze them, then expose only the leaders."""
+    """Discover candidates, apply horizon scoring, then publish evidence-backed leaders."""
     if limit < 1 or recommendations < 1 or recommendations > limit:
         raise ValueError("limit and recommendations must be positive, with recommendations <= limit")
     market_key = market.strip().lower()
+    horizon_key = horizon.strip().lower()
     if market_key not in {"us", "india"}:
         raise ValueError("market must be US or India")
+    if horizon_key not in {"short", "long"}:
+        raise ValueError("horizon must be short or long")
 
     cfg = config or SourceConfig.from_env()
     discovery = MarketDiscovery(ProviderHealthRegistry())
@@ -52,7 +57,13 @@ def recommend_market(
     else:
         raise RuntimeError("Open-ended discovery requires TWELVE_DATA_API_KEY, or ALPHAVANTAGE_API_KEY for US discovery")
 
-    result = discovery.discover(fetch, provider=provider_name, market=market_key, limit=limit)
+    result = discovery.discover(
+        fetch,
+        provider=provider_name,
+        market=market_key,
+        limit=limit,
+        horizon=horizon_key,
+    )
     if result.errors:
         raise RuntimeError("Market discovery failed: " + "; ".join(f"{k}: {v}" for k, v in result.errors.items()))
     if not result.candidates:
@@ -61,19 +72,25 @@ def recommend_market(
     analyzed: list[tuple[float, StockAnalysis]] = []
     for candidate in result.candidates:
         try:
-            analysis = analyze_stock(candidate.ticker, market_key, horizon, cfg)
+            analysis = analyze_stock(candidate.ticker, market_key, horizon_key, cfg)
         except Exception as exc:
             warnings.append(f"{candidate.ticker}: analysis failed: {exc}")
             continue
-        if not analysis.data_sources or analysis.last_price is None:
-            warnings.append(f"{candidate.ticker}: excluded because evidence coverage is insufficient")
+        if len(analysis.data_sources) < MIN_EVIDENCE_SOURCES or analysis.last_price is None:
+            warnings.append(
+                f"{candidate.ticker}: excluded because evidence coverage is below "
+                f"the {MIN_EVIDENCE_SOURCES}-source threshold"
+            )
             continue
-        analyzed.append((analysis.score * analysis.confidence, analysis))
+        # The final publication score combines the horizon-specific discovery
+        # shortlist with the fully analyzed stock score and confidence.
+        final_score = candidate.score * 0.35 + analysis.score * 0.65
+        analyzed.append((final_score * analysis.confidence, analysis))
 
     analyzed.sort(key=lambda item: (item[0], item[1].ticker), reverse=True)
     return MarketRecommendations(
         market="US" if market_key == "us" else "India",
-        horizon="Short term" if horizon.lower() == "short" else "Long term",
+        horizon="Short term" if horizon_key == "short" else "Long term",
         candidates_scanned=len(result.candidates),
         candidates_analyzed=len(analyzed),
         recommendations=tuple(item[1] for item in analyzed[:recommendations]),
@@ -89,6 +106,7 @@ def asdict(result: MarketRecommendations) -> dict[str, Any]:
         "candidates_scanned": result.candidates_scanned,
         "candidates_analyzed": result.candidates_analyzed,
         "discovery_provider": result.discovery_provider,
+        "minimum_evidence_sources": MIN_EVIDENCE_SOURCES,
         "recommendations": [_stock_dict(item) for item in result.recommendations],
         "warnings": list(result.warnings),
         "advisory_only": True,

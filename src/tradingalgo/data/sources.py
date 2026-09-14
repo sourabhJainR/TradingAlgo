@@ -20,9 +20,7 @@ class SourceConfig:
             alpha_vantage_key=os.getenv("ALPHAVANTAGE_API_KEY"),
             finnhub_key=os.getenv("FINNHUB_API_KEY"),
             fred_key=os.getenv("FRED_API_KEY"),
-            sec_user_agent=os.getenv(
-                "SEC_USER_AGENT", "TradingAlgo research contact: configured-by-user"
-            ),
+            sec_user_agent=os.getenv("SEC_USER_AGENT", "TradingAlgo research contact: configured-by-user"),
         )
 
 
@@ -70,6 +68,15 @@ class FinnhubSource:
 
     def quote(self, symbol: str) -> ProviderResponse:
         return self._call("quote", symbol=symbol)
+
+    def profile(self, symbol: str) -> ProviderResponse:
+        return self._call("stock/profile2", symbol=symbol)
+
+    def candles(self, symbol: str, days: int = 500) -> ProviderResponse:
+        import time
+        end = int(time.time())
+        start = end - days * 86400
+        return self._call("stock/candle", symbol=symbol, resolution="D", _from=start, to=end)
 
     def recommendation_trends(self, symbol: str) -> ProviderResponse:
         return self._call("stock/recommendation", symbol=symbol)
@@ -122,13 +129,4 @@ class GdeltSource:
         self.provider = HttpProvider(self.name, "https://api.gdeltproject.org/api/v2")
 
     def news(self, query: str, max_records: int = 50) -> ProviderResponse:
-        return self.provider.fetch(
-            "doc/doc",
-            {
-                "query": query,
-                "mode": "artlist",
-                "format": "json",
-                "maxrecords": max_records,
-                "sort": "datedesc",
-            },
-        )
+        return self.provider.fetch("doc/doc", {"query": query, "mode": "artlist", "format": "json", "maxrecords": max_records, "sort": "datedesc"})

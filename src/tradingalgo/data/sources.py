@@ -23,9 +23,7 @@ class SourceConfig:
             alpha_vantage_key=os.getenv("ALPHAVANTAGE_API_KEY"),
             finnhub_key=os.getenv("FINNHUB_API_KEY"),
             fred_key=os.getenv("FRED_API_KEY"),
-            sec_user_agent=os.getenv(
-                "SEC_USER_AGENT", "TradingAlgo research contact: configured-by-user"
-            ),
+            sec_user_agent=os.getenv("SEC_USER_AGENT", "TradingAlgo research contact: configured-by-user"),
         )
 
 
@@ -48,18 +46,34 @@ class AlphaVantageSource:
     def daily(self, symbol: str, outputsize: str = "compact") -> ProviderResponse:
         return self._call("TIME_SERIES_DAILY", symbol=symbol, outputsize=outputsize)
 
-    def technical(
-        self, function: str, symbol: str, interval: str = "daily", **params: Any
-    ) -> ProviderResponse:
+    def technical(self, function: str, symbol: str, interval: str = "daily", **params: Any) -> ProviderResponse:
         return self._call(function, symbol=symbol, interval=interval, **params)
 
-    def news_sentiment(
-        self, tickers: str | None = None, limit: int = 50
-    ) -> ProviderResponse:
+    def news_sentiment(self, tickers: str | None = None, limit: int = 50) -> ProviderResponse:
         params: dict[str, Any] = {"limit": limit, "sort": "LATEST"}
         if tickers:
             params["tickers"] = tickers
         return self._call("NEWS_SENTIMENT", **params)
+
+
+class StooqSource:
+    """Public Stooq CSV market history; no account or API key is required."""
+
+    name = "stooq_public"
+    base_url = "https://stooq.com/q/d/l/"
+
+    def daily(self, symbol: str, days: int = 500) -> ProviderResponse:
+        start = date.today() - timedelta(days=max(days * 2, 730))
+        end = date.today()
+        response = httpx.get(
+            self.base_url,
+            params={"s": symbol.lower(), "d1": start.strftime("%Y%m%d"), "d2": end.strftime("%Y%m%d"), "i": "d"},
+            headers={"User-Agent": "TradingAlgo research client"},
+            timeout=20.0,
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        return ProviderResponse(self.name, str(response.url), datetime.now(timezone.utc), response.text)
 
 
 class NsePublicSource:
@@ -81,12 +95,7 @@ class NsePublicSource:
             warm.raise_for_status()
             response = client.get(self.base_url + path, params=params)
             response.raise_for_status()
-            return ProviderResponse(
-                self.name,
-                str(response.url),
-                datetime.now(timezone.utc),
-                response.json(),
-            )
+            return ProviderResponse(self.name, str(response.url), datetime.now(timezone.utc), response.json())
 
     def quote(self, symbol: str) -> ProviderResponse:
         return self._get("/api/quote-equity", {"symbol": symbol.upper()})
@@ -96,12 +105,7 @@ class NsePublicSource:
         start = end - timedelta(days=days * 2)
         return self._get(
             "/api/historical/cm/equity",
-            {
-                "symbol": symbol.upper(),
-                "series": '["EQ"]',
-                "from": start.strftime("%d-%m-%Y"),
-                "to": end.strftime("%d-%m-%Y"),
-            },
+            {"symbol": symbol.upper(), "series": '["EQ"]', "from": start.strftime("%d-%m-%Y"), "to": end.strftime("%d-%m-%Y")},
         )
 
     def universe(self, index: str = "NIFTY 500") -> ProviderResponse:
@@ -129,15 +133,8 @@ class FinnhubSource:
 
     def candles(self, symbol: str, days: int = 500) -> ProviderResponse:
         import time
-
         end = int(time.time())
-        return self._call(
-            "stock/candle",
-            symbol=symbol,
-            resolution="D",
-            _from=end - days * 86400,
-            to=end,
-        )
+        return self._call("stock/candle", symbol=symbol, resolution="D", _from=end - days * 86400, to=end)
 
     def recommendation_trends(self, symbol: str) -> ProviderResponse:
         return self._call("stock/recommendation", symbol=symbol)
@@ -156,11 +153,7 @@ class SecSource:
     name = "sec_edgar"
 
     def __init__(self, config: SourceConfig) -> None:
-        self.provider = HttpProvider(
-            self.name,
-            "https://data.sec.gov",
-            headers={"User-Agent": config.sec_user_agent, "Accept-Encoding": "gzip, deflate"},
-        )
+        self.provider = HttpProvider(self.name, "https://data.sec.gov", headers={"User-Agent": config.sec_user_agent, "Accept-Encoding": "gzip, deflate"})
 
     def submissions(self, cik: str) -> ProviderResponse:
         return self.provider.fetch(f"submissions/CIK{cik.zfill(10)}.json")
@@ -190,13 +183,4 @@ class GdeltSource:
         self.provider = HttpProvider(self.name, "https://api.gdeltproject.org/api/v2")
 
     def news(self, query: str, max_records: int = 50) -> ProviderResponse:
-        return self.provider.fetch(
-            "doc/doc",
-            {
-                "query": query,
-                "mode": "artlist",
-                "format": "json",
-                "maxrecords": max_records,
-                "sort": "datedesc",
-            },
-        )
+        return self.provider.fetch("doc/doc", {"query": query, "mode": "artlist", "format": "json", "maxrecords": max_records, "sort": "datedesc"})

@@ -15,9 +15,13 @@ class DiscoveryPolicy:
     min_avg_volume: float = 100_000.0
     min_dollar_volume: float = 2_000_000.0
     min_evidence: int = 3
-    min_score: float = 35.0
+    min_score: float = 45.0
     min_sector_relative_strength: float = 35.0
     min_market_regime: float = 35.0
+
+    def __post_init__(self) -> None:
+        if self.horizon.strip().lower() == "long" and self.min_score == 45.0:
+            object.__setattr__(self, "min_score", 55.0)
 
 
 SHORT_WEIGHTS = {
@@ -63,12 +67,12 @@ def _evidence_count(row: dict[str, Any]) -> int:
             pass
     fields = (
         ("price", "last_price"),
-        ("volume", "avg_volume", "average_volume"),
+        ("volume", "avg_volume", "average_volume", "volume"),
         ("momentum", "return_20d", "change_percentage"),
         ("trend", "trend_score"),
         ("fundamentals", "fundamental_score"),
         ("sector_relative_strength", "relative_strength"),
-        ("regime", "market_regime"),
+        ("regime", "market_regime", "regime_score"),
     )
     return sum(any(row.get(key) not in (None, "") for key in keys) for keys in fields)
 
@@ -97,7 +101,6 @@ def passes_filters(row: dict[str, Any], policy: DiscoveryPolicy) -> tuple[bool, 
     if row.get("market_regime") not in (None, "") or row.get("regime_score") not in (None, ""):
         if regime < policy.min_market_regime:
             reasons.append("market-regime filter")
-
     return not reasons, reasons
 
 
@@ -106,14 +109,13 @@ def score_row(row: dict[str, Any], policy: DiscoveryPolicy) -> tuple[float, dict
     factors = {
         "momentum": _number(row, "momentum", "return_20d", "change_percentage"),
         "trend": _number(row, "trend", "trend_score"),
-        "relative_strength": _number(row, "sector_relative_strength", "relative_strength"),
+        "relative_strength": _number(row, "sector_relative_strength", "relative_strength", "benchmark_relative_strength"),
         "liquidity": _number(row, "liquidity", "liquidity_score"),
         "catalyst": _number(row, "catalyst", "catalyst_score"),
         "fundamentals": _number(row, "fundamentals", "fundamental_score"),
         "regime": _number(row, "market_regime", "regime_score", default=50.0),
         "risk": _number(row, "risk", "risk_score"),
     }
-    # Percent-return inputs are converted to the model's 0-100 factor scale.
     for key in ("momentum", "relative_strength"):
         if abs(factors[key]) <= 20:
             factors[key] = max(0.0, min(100.0, 50.0 + factors[key] * 2.5))
@@ -129,7 +131,7 @@ def rank_rows(rows: list[dict[str, Any]], policy: DiscoveryPolicy) -> list[tuple
         score, factors = score_row(row, policy)
         if accepted and score >= policy.min_score:
             ranked.append((row, score, factors, []))
-        elif not accepted:
-            ranked.append((row, score, factors, reasons))
-    ranked.sort(key=lambda item: (item[1], str(item[0].get("ticker") or item[0].get("symbol") or "")), reverse=True)
+        else:
+            ranked.append((row, score, factors, reasons or ["minimum score filter"]))
+    ranked.sort(key=lambda item: (not item[3], item[1], str(item[0].get("ticker") or item[0].get("symbol") or "")), reverse=True)
     return ranked

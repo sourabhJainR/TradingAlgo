@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+from tradingalgo.data.sources import SourceConfig
+from tradingalgo.intelligence.technical_analytics import position_size
 
 from .market_recommendations import asdict as market_asdict, recommend_market
 from .research_service import _asdict, analyze_stock
@@ -40,6 +44,46 @@ class ResearchHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send(500, "application/json", json.dumps({"error": f"analysis failed: {exc}"}))
             return
+        if parsed.path == "/api/compare":
+            try:
+                tickers = _csv(query.get("tickers", [""])[0])
+                market = query.get("market", ["US"])[0]
+                horizon = query.get("horizon", ["short"])[0]
+                if not tickers:
+                    raise ValueError("tickers is required")
+                if len(tickers) > 10:
+                    raise ValueError("compare supports at most 10 tickers per request")
+                cfg = SourceConfig.from_env()
+                results = []
+                for ticker in tickers:
+                    try:
+                        results.append(_asdict(analyze_stock(ticker, market, horizon, cfg)))
+                    except Exception as exc:
+                        results.append({"ticker": ticker, "error": str(exc)})
+                ranked = sorted(results, key=lambda item: float(item.get("score", -101)), reverse=True)
+                self._send(200, "application/json", json.dumps({
+                    "market": market,
+                    "horizon": horizon,
+                    "count": len(ranked),
+                    "results": ranked,
+                    "advisory_only": True,
+                }))
+            except ValueError as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}))
+            return
+        if parsed.path == "/api/risk":
+            try:
+                result = position_size(
+                    capital=float(query.get("capital", [""])[0]),
+                    risk_percent=float(query.get("risk_percent", ["1"])[0]),
+                    entry=float(query.get("entry", [""])[0]),
+                    stop=float(query.get("stop", [""])[0]),
+                    max_position_percent=float(query.get("max_position_percent", ["25"])[0]),
+                )
+                self._send(200, "application/json", json.dumps({**result, "advisory_only": True}))
+            except (ValueError, TypeError) as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}))
+            return
         if parsed.path == "/api/recommend":
             market = query.get("market", ["US"])[0]
             horizon = query.get("horizon", ["short"])[0]
@@ -60,6 +104,10 @@ class ResearchHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+
+def _csv(value: str) -> list[str]:
+    return [item.strip().upper() for item in value.split(",") if item.strip()]
 
 
 def serve(host: str = "127.0.0.1", port: int = 8080) -> None:

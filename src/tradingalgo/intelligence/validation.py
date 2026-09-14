@@ -61,7 +61,7 @@ def calibrate_factors(snapshots: Sequence[PredictionSnapshot], outcomes: Sequenc
     pairs: dict[str, list[tuple[float, float]]] = {}
     for snapshot in snapshots:
         outcome = outcome_by_id.get(snapshot.prediction_id)
-        if outcome is None or _utc(outcome.observed_at) > max(_utc(o.observed_at) for o in outcomes if o.prediction_id == snapshot.prediction_id):
+        if outcome is None:
             continue
         for factor, score in snapshot.factor_scores.items():
             pairs.setdefault(factor, []).append((float(score), outcome.excess_return))
@@ -90,6 +90,11 @@ def _weighted_score(snapshot: PredictionSnapshot, weights: Mapping[str, float]) 
     denominator = sum(abs(weights.get(factor, 1.0)) for factor in snapshot.factor_scores) or 1.0
     return max(-100.0, min(100.0, sum(score * weights.get(factor, 1.0)
                                              for factor, score in snapshot.factor_scores.items()) / denominator))
+
+
+def _strategy_excess(snapshot: PredictionSnapshot, outcome: OutcomeObservation) -> float:
+    direction = 1.0 if snapshot.score > 0 else -1.0 if snapshot.score < 0 else 0.0
+    return outcome.excess_return * direction
 
 
 def walk_forward(snapshots: Sequence[PredictionSnapshot], outcomes: Sequence[OutcomeObservation],
@@ -139,18 +144,20 @@ def _metrics(pairs: Sequence[tuple[PredictionSnapshot, OutcomeObservation, float
     correct = 0
     brier: list[float] = []
     action_returns: dict[str, list[float]] = {}
+    strategy_returns: list[float] = []
     for snapshot, outcome, score in pairs:
         direction = 1 if score > 0 else -1 if score < 0 else 0
         actual = 1 if outcome.excess_return > 0 else -1 if outcome.excess_return < 0 else 0
         correct += direction == actual
         probability = 0.5 + 0.5 * max(-1.0, min(1.0, score / 100.0))
         brier.append((probability - float(actual > 0)) ** 2)
-        action_returns.setdefault(snapshot.action, []).append(outcome.excess_return)
+        strategy_return = _strategy_excess(snapshot, outcome)
+        strategy_returns.append(strategy_return)
+        action_returns.setdefault(snapshot.action, []).append(strategy_return)
     action_metrics = {a: {"count": float(len(v)), "mean_excess_return": mean(v)} for a, v in action_returns.items()}
     return ValidationResult(len(pairs), len(pairs), correct / len(pairs),
-                            mean(o.excess_return for _, o, _ in pairs), mean(o.realized_return for _, o, _ in pairs),
-                            mean(o.max_drawdown for _, o, _ in pairs), mean(brier),
-                            abs(mean(s.confidence for s, _, _ in pairs) - correct / len(pairs)), action_metrics, dict(weights))
+                            mean(strategy_returns), mean(strategy_returns), mean(o.max_drawdown for _, o, _ in pairs),
+                            mean(brier), abs(mean(s.confidence for s, _, _ in pairs) - correct / len(pairs)), action_metrics, dict(weights))
 
 
 def _average_weights(rows: Sequence[Mapping[str, float]]) -> dict[str, float]:

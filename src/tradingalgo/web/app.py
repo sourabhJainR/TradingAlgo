@@ -95,25 +95,13 @@ class ResearchHandler(BaseHTTPRequestHandler):
                     except Exception as exc:
                         results.append({"ticker": ticker, "error": str(exc)})
                 ranked = sorted(results, key=lambda item: float(item.get("score", -101)), reverse=True)
-                self._send(200, "application/json", json.dumps({
-                    "market": market,
-                    "horizon": horizon,
-                    "count": len(ranked),
-                    "results": ranked,
-                    "advisory_only": True,
-                }))
+                self._send(200, "application/json", json.dumps({"market": market, "horizon": horizon, "count": len(ranked), "results": ranked, "advisory_only": True}))
             except ValueError as exc:
                 self._send(400, "application/json", json.dumps({"error": str(exc)}))
             return
         if parsed.path == "/api/risk":
             try:
-                result = position_size(
-                    capital=float(query.get("capital", [""])[0]),
-                    risk_percent=float(query.get("risk_percent", ["1"])[0]),
-                    entry=float(query.get("entry", [""])[0]),
-                    stop=float(query.get("stop", [""])[0]),
-                    max_position_percent=float(query.get("max_position_percent", ["25"])[0]),
-                )
+                result = position_size(capital=float(query.get("capital", [""])[0]), risk_percent=float(query.get("risk_percent", ["1"])[0]), entry=float(query.get("entry", [""])[0]), stop=float(query.get("stop", [""])[0]), max_position_percent=float(query.get("max_position_percent", ["25"])[0]))
                 self._send(200, "application/json", json.dumps({**result, "advisory_only": True}))
             except (ValueError, TypeError) as exc:
                 self._send(400, "application/json", json.dumps({"error": str(exc)}))
@@ -148,25 +136,8 @@ class ResearchHandler(BaseHTTPRequestHandler):
                         analyses.append(analyze_stock(ticker, market, horizon, cfg))
                     except Exception as exc:
                         warnings.append(f"{ticker}: {exc}")
-                selected = screen_analyses(
-                    analyses,
-                    min_score=_float_query(query, "min_score"),
-                    min_confidence=_float_query(query, "min_confidence"),
-                    action=query.get("action", [""])[0] or None,
-                    min_rsi=_float_query(query, "min_rsi"),
-                    max_rsi=_float_query(query, "max_rsi"),
-                    max_drawdown=_float_query(query, "max_drawdown"),
-                    breakout_only=_bool_query(query, "breakout_only"),
-                )
-                self._send(200, "application/json", json.dumps({
-                    "market": market,
-                    "horizon": horizon,
-                    "scanned": len(analyses),
-                    "matched": len(selected),
-                    "results": [_asdict(item) for item in selected],
-                    "warnings": warnings,
-                    "advisory_only": True,
-                }))
+                selected = screen_analyses(analyses, min_score=_float_query(query, "min_score"), min_confidence=_float_query(query, "min_confidence"), action=query.get("action", [""])[0] or None, min_rsi=_float_query(query, "min_rsi"), max_rsi=_float_query(query, "max_rsi"), max_drawdown=_float_query(query, "max_drawdown"), breakout_only=_bool_query(query, "breakout_only"))
+                self._send(200, "application/json", json.dumps({"market": market, "horizon": horizon, "scanned": len(analyses), "matched": len(selected), "results": [_asdict(item) for item in selected], "warnings": warnings, "advisory_only": True}))
             except ValueError as exc:
                 self._send(400, "application/json", json.dumps({"error": str(exc)}))
             except Exception as exc:
@@ -231,12 +202,7 @@ class ResearchHandler(BaseHTTPRequestHandler):
                 horizon = query.get("horizon", ["short"])[0]
                 cfg = SourceConfig.from_env()
                 analysis = analyze_stock(ticker, market, horizon, cfg)
-                self._send(200, "application/json", json.dumps({
-                    "ticker": ticker.upper(),
-                    "analysis": _asdict(analysis),
-                    "alerts": alert_signals(analysis),
-                    "advisory_only": True,
-                }))
+                self._send(200, "application/json", json.dumps({"ticker": ticker.upper(), "analysis": _asdict(analysis), "alerts": alert_signals(analysis), "advisory_only": True}))
             except ValueError as exc:
                 self._send(400, "application/json", json.dumps({"error": str(exc)}))
             except Exception as exc:
@@ -254,26 +220,15 @@ class ResearchHandler(BaseHTTPRequestHandler):
                 avg_score = sum(item.score for item in rows) / len(rows) if rows else 0.0
                 avg_confidence = sum(item.confidence for item in rows) / len(rows) if rows else 0.0
                 breakouts = sum((item.technical_signals or {}).get("breakout_20d") == "yes" for item in rows)
-                self._send(200, "application/json", json.dumps({
-                    "market": result.market,
-                    "horizon": result.horizon,
-                    "sample": len(rows),
-                    "buy": bullish,
-                    "watch": watch,
-                    "avoid": avoid,
-                    "buy_pct": round(bullish / len(rows) * 100.0, 2) if rows else 0.0,
-                    "average_score": round(avg_score, 2),
-                    "average_confidence": round(avg_confidence, 4),
-                    "breakout_count": breakouts,
-                    "provider": result.discovery_provider,
-                    "note": "Pulse is calculated from the analyzed discovery sample, not the full exchange universe.",
-                    "advisory_only": True,
-                }))
+                self._send(200, "application/json", json.dumps({"market": result.market, "horizon": result.horizon, "sample": len(rows), "buy": bullish, "watch": watch, "avoid": avoid, "buy_pct": round(bullish / len(rows) * 100.0, 2) if rows else 0.0, "average_score": round(avg_score, 2), "average_confidence": round(avg_confidence, 4), "breakout_count": breakouts, "provider": result.discovery_provider, "note": "Pulse is calculated from the analyzed discovery sample, not the complete exchange universe.", "advisory_only": True}))
             except Exception as exc:
                 self._send(500, "application/json", json.dumps({"error": f"market pulse failed: {exc}"}))
             return
         if parsed.path in {"/", "/index.html"}:
             self._send(200, "text/html; charset=utf-8", (STATIC / "index.html").read_text(encoding="utf-8"))
+            return
+        if parsed.path == "/favorites":
+            self._send(200, "text/html; charset=utf-8", (STATIC / "favorites.html").read_text(encoding="utf-8"))
             return
         self._send(404, "application/json", '{"error":"not found"}')
 
@@ -289,9 +244,7 @@ def _multipart_upload(handler: ResearchHandler) -> tuple[str, str, bytes]:
     if length <= 0 or length > 10 * 1024 * 1024:
         raise ValueError("portfolio upload must be between 1 byte and 10 MB")
     body = handler.rfile.read(length)
-    message = BytesParser(policy=default).parsebytes(
-        b"Content-Type: " + content_type.encode("utf-8") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
-    )
+    message = BytesParser(policy=default).parsebytes(b"Content-Type: " + content_type.encode("utf-8") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body)
     provider = "excel"
     filename = ""
     content = b""
@@ -324,17 +277,7 @@ def _analyze_portfolio_snapshot(snapshot: Any) -> dict[str, object]:
         except Exception as exc:
             warnings.append(f"{ticker}: {exc}")
     result = portfolio_diagnostics(holdings, analyses)
-    result.update({
-        "provider": snapshot.provider,
-        "source": snapshot.source,
-        "currency": snapshot.currency,
-        "positions_imported": len(snapshot.positions),
-        "imported_positions": [item.as_dict() for item in snapshot.positions],
-        "market": market,
-        "horizon": horizon,
-        "warnings": warnings,
-        "advisory_only": True,
-    })
+    result.update({"provider": snapshot.provider, "source": snapshot.source, "currency": snapshot.currency, "positions_imported": len(snapshot.positions), "imported_positions": [item.as_dict() for item in snapshot.positions], "market": market, "horizon": horizon, "warnings": warnings, "advisory_only": True})
     return result
 
 

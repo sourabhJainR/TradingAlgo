@@ -1,6 +1,7 @@
 """Evidence, signal, orchestration and advisory intelligence."""
 
 from .composer import compose_advisory, evidence_signals
+from .market_api_discovery import alpha_vantage_universe, twelve_data_universe
 from .market_scanner import DiscoveryResult, MarketCandidate, MarketDiscovery
 from .orchestrator import (
     FetchCandidate,
@@ -19,6 +20,8 @@ __all__ = [
     "MarketRecommendation",
     "MarketRecommendationResult",
     "OrchestrationResult",
+    "alpha_vantage_universe",
     "compose_advisory",
     "evidence_signals",
+    "twelve_data_universe",
 ]

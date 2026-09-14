@@ -3,7 +3,9 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
-ROOT = Path(SPECPATH).parent.parent
+# SPECPATH points at the directory containing this spec file. The repository
+# root is therefore its direct parent (packaging/ -> repository root).
+ROOT = Path(SPECPATH).parent
 SRC = ROOT / "src"
 STATIC = SRC / "tradingalgo" / "web" / "static"
 

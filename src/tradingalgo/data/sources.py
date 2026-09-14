@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
+
+import httpx
 
 from .providers import HttpProvider, ProviderResponse
 
@@ -51,6 +54,49 @@ class AlphaVantageSource:
         if tickers:
             params["tickers"] = tickers
         return self._call("NEWS_SENTIMENT", **params)
+
+
+class NsePublicSource:
+    """Free, public NSE website data used as an India fallback.
+
+    This deliberately uses the public web endpoints rather than any paid NSE
+    historical-data subscription. It is intended for personal/research use and
+    does not redistribute NSE data.
+    """
+
+    name = "nse_public"
+    base_url = "https://www.nseindia.com"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (TradingAlgo research client)",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com/",
+        "Connection": "keep-alive",
+    }
+
+    def _get(self, path: str, params: dict[str, Any]) -> ProviderResponse:
+        with httpx.Client(timeout=20.0, headers=self.headers, follow_redirects=True) as client:
+            warm = client.get(self.base_url + "/")
+            warm.raise_for_status()
+            response = client.get(self.base_url + path, params=params)
+            response.raise_for_status()
+            return ProviderResponse(self.name, str(response.url), __import__("datetime").datetime.now(__import__("datetime").timezone.utc), response.json())
+
+    def quote(self, symbol: str) -> ProviderResponse:
+        return self._get("/api/quote-equity", {"symbol": symbol.upper()})
+
+    def historical(self, symbol: str, days: int = 500) -> ProviderResponse:
+        end = date.today()
+        start = end - timedelta(days=days * 2)
+        return self._get("/api/historical/cm/equity", {
+            "symbol": symbol.upper(),
+            "series": '["EQ"]',
+            "from": start.strftime("%d-%m-%Y"),
+            "to": end.strftime("%d-%m-%Y"),
+        })
+
+    def universe(self, index: str = "NIFTY 500") -> ProviderResponse:
+        return self._get("/api/equity-stockIndices", {"index": index})
 
 
 class FinnhubSource:

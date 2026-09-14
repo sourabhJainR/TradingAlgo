@@ -174,7 +174,7 @@ def analyze(candles: Sequence[Any]) -> dict[str, float | str | None]:
     lower = sma20 - 2.0 * std20 if sma20 is not None else None
     atr14 = _atr(candles, 14)
     rsi14 = _rsi(closes, 14)
-    high20 = max(highs[-20:]) if highs else price
+    max(highs[-20:]) if highs else price
     high52 = max(highs[-252:]) if highs else price
     low52 = min(closes[-252:]) if closes else price
     volatility = _annualized_volatility(closes)

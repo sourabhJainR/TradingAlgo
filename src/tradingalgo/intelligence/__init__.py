@@ -11,6 +11,7 @@ from .orchestrator import (
     MarketRecommendationResult,
     OrchestrationResult,
 )
+from .trade_plan import TradePlan, build_trade_plan, candles_from_provider
 
 __all__ = [
     "DiscoveryResult",
@@ -21,8 +22,11 @@ __all__ = [
     "MarketRecommendation",
     "MarketRecommendationResult",
     "OrchestrationResult",
+    "TradePlan",
     "alpha_vantage_analysis_fetchers",
     "alpha_vantage_universe",
+    "build_trade_plan",
+    "candles_from_provider",
     "compose_advisory",
     "evidence_signals",
     "twelve_data_analysis_fetchers",

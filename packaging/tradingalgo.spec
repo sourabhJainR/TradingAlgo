@@ -22,7 +22,10 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter"],
+    # TradingAlgo does not import setuptools/pkg_resources at runtime. Exclude
+    # them so PyInstaller does not add the pkg_resources runtime hook, which
+    # can pull in optional setuptools backports that are not application deps.
+    excludes=["tkinter", "pkg_resources", "setuptools"],
     noarchive=False,
 )
 

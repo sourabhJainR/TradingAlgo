@@ -5,6 +5,7 @@ from typing import Any
 
 from tradingalgo.data.candles import alpha_vantage_daily, finnhub_candles, nse_historical
 from tradingalgo.data.sources import AlphaVantageSource, FinnhubSource, NsePublicSource, SourceConfig
+from tradingalgo.intelligence.event_intelligence import analyze_events
 from tradingalgo.intelligence.technical_analytics import analyze as analyze_technical
 
 
@@ -28,10 +29,23 @@ class StockAnalysis:
     data_sources: list[str]
     warnings: list[str]
     technical_signals: dict[str, float | str | None]
+    event_signals: dict[str, Any]
+    score_weights: dict[str, float]
+    score_components: dict[str, float]
+    next_move: str
+    next_move_probability: float
+
+
+SCORE_WEIGHTS = {
+    "technical": 0.55,
+    "corporate_events": 0.20,
+    "legal_regulatory": 0.15,
+    "geopolitical": 0.10,
+}
 
 
 def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig | None = None) -> StockAnalysis:
-    """Build a transparent advisory view. It never places an order."""
+    """Build a transparent advisory view using price structure plus weighted public event evidence."""
     cfg = config or SourceConfig.from_env()
     symbol = ticker.strip().upper()
     market_key = market.strip().lower()
@@ -109,15 +123,28 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
     last_price = _last_price(quote, candles)
     metrics = _technical_metrics(candles)
     technical_signals = analyze_technical(candles)
-    score = _score(metrics, horizon_key)
+    technical_score = _technical_score(metrics, technical_signals, horizon_key)
+    event_signals = analyze_events(symbol, "US" if market_key == "us" else "India")
+    warnings.extend(event_signals.get("warnings", []))
+    if event_signals.get("available"):
+        sources.append("GDELT public event/news intelligence")
+    components = _event_components(event_signals)
+    score_components = {
+        "technical": round(technical_score, 2),
+        "corporate_events": round(components["corporate_events"], 2),
+        "legal_regulatory": round(components["legal_regulatory"], 2),
+        "geopolitical": round(components["geopolitical"], 2),
+    }
+    score = sum(SCORE_WEIGHTS[key] * score_components[key] for key in SCORE_WEIGHTS)
     action = _action(score)
-    confidence = _confidence(metrics, news, sources)
+    confidence = _confidence(metrics, event_signals, sources)
     levels = _levels(last_price, metrics, horizon_key)
     market_view = _market_view(metrics)
     sector_news = _news_lines(news, sector)
-    risks = _risks(metrics, market_view, news, warnings)
-    basis = _basis(metrics, horizon_key, market_view, technical_signals)
-    hypothesis = _hypothesis(action, metrics, horizon_key)
+    risks = _risks(metrics, market_view, news, event_signals, warnings)
+    basis = _basis(metrics, horizon_key, market_view, technical_signals, event_signals, score_components)
+    hypothesis = _hypothesis(action, metrics, horizon_key, event_signals)
+    next_move, probability = _next_move(score, technical_signals, event_signals)
 
     return StockAnalysis(
         ticker=symbol,
@@ -138,6 +165,11 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
         data_sources=sources,
         warnings=warnings,
         technical_signals=technical_signals,
+        event_signals=event_signals,
+        score_weights=SCORE_WEIGHTS,
+        score_components=score_components,
+        next_move=next_move,
+        next_move_probability=round(probability, 2),
     )
 
 
@@ -197,13 +229,42 @@ def _technical_metrics(candles: list[Any]) -> dict[str, float]:
     }
 
 
-def _score(m: dict[str, float], horizon: str) -> float:
+def _technical_score(m: dict[str, float], signals: dict[str, Any], horizon: str) -> float:
     if not m:
         return 0.0
     p = m["price"]
-    score = ((30 if p > m["sma20"] else -30) + (25 if p > m["sma50"] else -25) + (25 if p > m["sma200"] else -25))
+    score = (30 if p > m["sma20"] else -30) + (25 if p > m["sma50"] else -25) + (25 if p > m["sma200"] else -25)
     score += 20 if (p > m["high20"] * 0.98 if horizon == "short" else p > m["sma50"]) else -20
+    if signals.get("macd_histogram") is not None:
+        score += 5 if float(signals["macd_histogram"]) > 0 else -5
+    if signals.get("rsi14") is not None:
+        rsi = float(signals["rsi14"])
+        if 45 <= rsi <= 65:
+            score += 5
+        elif rsi > 75:
+            score -= 5
+        elif rsi < 25:
+            score += 2
+    pattern = signals.get("pattern")
+    if pattern in {"bullish_breakout", "higher_highs_higher_lows", "double_bottom_candidate"}:
+        score += 10
+    if pattern in {"bearish_breakdown", "lower_highs_lower_lows", "double_top_candidate"}:
+        score -= 10
     return max(-100.0, min(100.0, score))
+
+
+def _event_components(event_data: dict[str, Any]) -> dict[str, float]:
+    components = {"corporate_events": 0.0, "legal_regulatory": 0.0, "geopolitical": 0.0}
+    for row in event_data.get("signals", []):
+        event_type = row.get("event_type")
+        impact = float(row.get("impact", 0.0))
+        if event_type in {"order_contract", "earnings", "m_and_a", "product"}:
+            components["corporate_events"] += impact
+        elif event_type in {"lawsuit", "judgment", "regulatory"}:
+            components["legal_regulatory"] += impact
+        elif event_type in {"sanctions", "geopolitical"}:
+            components["geopolitical"] += impact
+    return {key: max(-100.0, min(100.0, value)) for key, value in components.items()}
 
 
 def _action(score: float) -> str:
@@ -214,11 +275,12 @@ def _action(score: float) -> str:
     return "WATCH"
 
 
-def _confidence(m: dict[str, float], news: list[dict[str, Any]], sources: list[str]) -> float:
+def _confidence(m: dict[str, float], events: dict[str, Any], sources: list[str]) -> float:
     if not m:
         return 0.15
-    coverage = min(1.0, len(sources) / 4.0)
-    return min(0.95, 0.35 + 0.25 * coverage + (0.15 if news else 0.0) + (0.25 if m.get("sma200", 0) else 0.0))
+    coverage = min(1.0, len(sources) / 5.0)
+    event_bonus = 0.15 if events.get("available") and events.get("signals") else 0.05 if events.get("available") else 0.0
+    return min(0.95, 0.30 + 0.25 * coverage + event_bonus + (0.25 if m.get("sma200", 0) else 0.0))
 
 
 def _levels(price: float | None, m: dict[str, float], horizon: str) -> tuple[float, float, float, float, float] | None:
@@ -258,40 +320,56 @@ def _news_lines(news: list[dict[str, Any]], sector: str) -> list[str]:
     return lines or [f"No recent {sector + ' ' if sector else ''}news was returned by the configured provider."]
 
 
-def _basis(m: dict[str, float], horizon: str, market_view: str, signals: dict[str, Any]) -> list[str]:
+def _basis(m: dict[str, float], horizon: str, market_view: str, signals: dict[str, Any], events: dict[str, Any], components: dict[str, float]) -> list[str]:
     if not m:
         return ["Insufficient market-price history; no technical prediction is asserted."]
     basis = [
-        f"Price versus 20/50/200-session moving averages: {m['price']:.2f} / {m['sma20']:.2f} / {m['sma50']:.2f} / {m['sma200']:.2f}.",
-        f"ATR-based risk distance is {m['atr']:.2f}.",
-        f"20-session range is {m['low20']:.2f} to {m['high20']:.2f}.",
-        f"52-week range is {m['low52']:.2f} to {m['high52']:.2f}.",
+        f"Technical weight 55%: price versus 20/50/200-session moving averages is {m['price']:.2f} / {m['sma20']:.2f} / {m['sma50']:.2f} / {m['sma200']:.2f}; technical component is {components['technical']:.1f}.",
+        f"Corporate-event weight 20%: event component is {components['corporate_events']:.1f}, covering orders, earnings, M&A and product events.",
+        f"Legal/regulatory weight 15%: event component is {components['legal_regulatory']:.1f}, covering lawsuits, judgments and regulatory actions.",
+        f"Geopolitical weight 10%: event component is {components['geopolitical']:.1f}, covering sanctions, conflict and supply/shipping risks.",
+        f"Chart pattern: {signals.get('pattern')}; breakout={signals.get('breakout_20d')}, breakdown={signals.get('breakdown_20d')}, RSI={signals.get('rsi14')}, MACD histogram={signals.get('macd_histogram')}, volume ratio={signals.get('volume_ratio_20d')}x.",
+        f"ATR-based risk distance is {m['atr']:.2f}; 20-session range is {m['low20']:.2f} to {m['high20']:.2f}.",
         market_view,
         f"Horizon rule: {horizon} setup; levels are derived from trend, range and ATR rather than a discretionary price guess.",
     ]
-    rsi = signals.get("rsi14")
-    macd_hist = signals.get("macd_histogram")
-    if rsi is not None:
-        basis.append(f"RSI(14) is {rsi:.2f}; readings below 30 are treated as oversold and above 70 as overbought.")
-    if macd_hist is not None:
-        basis.append(f"MACD histogram is {macd_hist:.4f}; positive values indicate short-term momentum is above its signal line.")
+    for row in events.get("signals", [])[:5]:
+        basis.append(f"Event evidence ({row.get('event_type')}): {row.get('title')} | impact {float(row.get('impact', 0.0)):+.1f}.")
     return basis
 
 
-def _hypothesis(action: str, m: dict[str, float], horizon: str) -> str:
+def _hypothesis(action: str, m: dict[str, float], horizon: str, events: dict[str, Any]) -> str:
     if not m:
         return "The hypothesis cannot be established until sufficient market data is available."
+    event_score = float(events.get("score", 0.0))
+    event_bias = "with event evidence supporting the move" if event_score > 15 else "with event evidence opposing the move" if event_score < -15 else "with mixed or limited event evidence"
     if action == "BUY":
-        return f"The {horizon} hypothesis is that trend continuation is more likely while price holds above the key moving-average and volatility support levels."
+        return f"The {horizon} hypothesis is that trend continuation is more likely while price holds key technical support, {event_bias}."
     if action == "AVOID":
-        return f"The {horizon} hypothesis is that downside or failed rebounds remain more likely while price stays below the key trend averages."
-    return f"The {horizon} hypothesis is inconclusive because the trend signals do not align strongly enough for a directional setup."
+        return f"The {horizon} hypothesis is that downside or failed rebounds remain more likely while price stays below key trend levels, {event_bias}."
+    return f"The {horizon} hypothesis is inconclusive because technical and event evidence does not align strongly enough for a directional setup."
 
 
-def _risks(m: dict[str, float], market_view: str, news: list[dict[str, Any]], warnings: list[str]) -> list[str]:
+def _next_move(score: float, signals: dict[str, Any], events: dict[str, Any]) -> tuple[str, float]:
+    if score >= 20:
+        direction = "Higher / bullish bias"
+    elif score <= -20:
+        direction = "Lower / bearish bias"
+    else:
+        direction = "Sideways / mixed bias"
+    strength = min(0.82, 0.50 + abs(score) / 300.0)
+    if signals.get("pattern") in {"bullish_breakout", "bearish_breakdown"}:
+        strength = min(0.88, strength + 0.05)
+    if not events.get("available"):
+        strength = min(strength, 0.60)
+    return direction, round(strength, 2)
+
+
+def _risks(m: dict[str, float], market_view: str, news: list[dict[str, Any]], events: dict[str, Any], warnings: list[str]) -> list[str]:
     risks = [
         "Technical levels can fail after earnings, macro shocks or gap moves.",
         "Stop-loss levels are research levels, not guaranteed execution prices.",
+        "Event classification is evidence weighting, not proof that an event will move the stock in the predicted direction.",
     ]
     if m and m["atr"] > m["price"] * 0.04:
         risks.append("Recent volatility is high relative to price; position sizing should be conservative.")
@@ -299,6 +377,8 @@ def _risks(m: dict[str, float], market_view: str, news: list[dict[str, Any]], wa
         risks.append("The current trend context is unfavorable for long exposure.")
     if news:
         risks.append("News sentiment can change quickly and headlines may be incomplete.")
+    if events.get("signals"):
+        risks.append("Multiple headlines can describe the same underlying event; the model deduplicates identical titles but not all related stories.")
     if warnings:
         risks.append("Some requested data sources were unavailable, reducing confidence.")
     return risks

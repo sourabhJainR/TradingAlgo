@@ -5,8 +5,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .market_recommendations import asdict as market_asdict, recommend_market
 from .research_service import _asdict, analyze_stock
-
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -24,11 +24,11 @@ class ResearchHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
         if parsed.path == "/api/health":
             self._send(200, "application/json", '{"status":"ok","mode":"research-only"}')
             return
         if parsed.path == "/api/analyze":
-            query = parse_qs(parsed.query)
             ticker = query.get("ticker", [""])[0]
             market = query.get("market", ["US"])[0]
             horizon = query.get("horizon", ["short"])[0]
@@ -39,6 +39,19 @@ class ResearchHandler(BaseHTTPRequestHandler):
                 self._send(400, "application/json", json.dumps({"error": str(exc)}))
             except Exception as exc:
                 self._send(500, "application/json", json.dumps({"error": f"analysis failed: {exc}"}))
+            return
+        if parsed.path == "/api/recommend":
+            market = query.get("market", ["US"])[0]
+            horizon = query.get("horizon", ["short"])[0]
+            try:
+                limit = int(query.get("limit", ["10"])[0])
+                recommendations = int(query.get("recommendations", ["5"])[0])
+                result = recommend_market(market, horizon, limit=limit, recommendations=recommendations)
+                self._send(200, "application/json", json.dumps(market_asdict(result)))
+            except ValueError as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}))
+            except Exception as exc:
+                self._send(500, "application/json", json.dumps({"error": f"market recommendation failed: {exc}"}))
             return
         if parsed.path in {"/", "/index.html"}:
             self._send(200, "text/html; charset=utf-8", (STATIC / "index.html").read_text(encoding="utf-8"))

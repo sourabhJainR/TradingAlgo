@@ -103,7 +103,6 @@ def _pattern_signals(
     ema20 = _ema(closes, 20)
     price = closes[-1]
     recent = closes[-20:]
-    prior = closes[-40:-20] if len(closes) >= 40 else []
     recent_high = max(highs[-20:])
     recent_low = min(lows[-20:])
     prior_high = max(highs[-40:-20]) if len(highs) >= 40 else recent_high

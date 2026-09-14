@@ -50,7 +50,7 @@ class MarketDiscovery:
         limit: int = 10,
         as_of: datetime | None = None,
         horizon: str = "short",
-        min_evidence: int = 0,
+        min_evidence: int = 3,
     ) -> DiscoveryResult:
         point_in_time = as_of or datetime.now(timezone.utc)
         if point_in_time.tzinfo is None:
@@ -103,31 +103,19 @@ def _candidate(row: dict[str, Any], provider: str, default_market: str, policy: 
         return None
 
     accepted, filter_reasons = passes_filters(row, policy)
-    # Legacy catalog rows may not carry price/volume/evidence metadata. Do not
-    # manufacture those values; the full-analysis evidence gate remains the
-    # final publication gate in the recommendation service.
-    if policy.min_evidence > 0 and "minimum evidence filter" in filter_reasons:
-        return None
-    if not accepted and filter_reasons:
+    if not accepted:
         return None
 
-    supplied_score = row.get("score")
-    if supplied_score is not None:
-        try:
-            score = float(supplied_score)
-        except (TypeError, ValueError):
-            score, factors = score_row(row, policy)
-        else:
-            _, factors = score_row(row, policy)
-    else:
-        score, factors = score_row(row, policy)
+    score, factors = score_row(row, policy)
+    if score < policy.min_score:
+        return None
 
     rationale = str(row.get("rationale") or row.get("reason") or _rationale(policy, factors))
     return MarketCandidate(
         ticker=ticker,
         market=str(row.get("market") or default_market),
         name=str(row.get("name")) if row.get("name") else None,
-        score=max(-100.0, min(100.0, score)),
+        score=max(0.0, min(100.0, score)),
         rationale=rationale,
         factors=factors,
         source=provider,

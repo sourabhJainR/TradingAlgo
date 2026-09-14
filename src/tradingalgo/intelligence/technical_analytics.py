@@ -83,15 +83,23 @@ def _max_drawdown(closes: Sequence[float]) -> float:
 def _annualized_volatility(closes: Sequence[float]) -> float | None:
     if len(closes) < 3:
         return None
-    returns = [current / previous - 1.0 for previous, current in zip(closes[:-1], closes[1:], strict=True) if previous]
+    returns = [
+        current / previous - 1.0
+        for previous, current in zip(closes[:-1], closes[1:], strict=True)
+        if previous
+    ]
     return pstdev(returns) * sqrt(252.0) * 100.0 if len(returns) > 1 else None
 
 
-def _pattern_signals(closes: Sequence[float], highs: Sequence[float], lows: Sequence[float], volumes: Sequence[float]) -> dict[str, float | str | None]:
+def _pattern_signals(
+    closes: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
+    volumes: Sequence[float],
+) -> dict[str, float | str | None]:
     if len(closes) < 30:
         return {"trend_pattern": "insufficient_history"}
     sma20 = mean(closes[-20:])
-    sma50 = mean(closes[-50:]) if len(closes) >= 50 else None
     ema20 = _ema(closes, 20)
     price = closes[-1]
     recent = closes[-20:]

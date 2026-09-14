@@ -1,12 +1,10 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-
 from .fundamentals import normalize_companyfacts
 from .macro import macro_evidence, normalize_fred
-from .models import Evidence, Horizon, Polarity, SourceType
+from .models import Evidence, Horizon, Polarity
 from .normalizers import normalize_analyst_recommendations, normalize_news, normalize_quote
 
 
@@ -56,6 +54,17 @@ def _fred_evidence(ticker: str, payload: dict[str, Any]) -> list[Evidence]:
     return result
 
 
+def _normalize_twelve_quote(ticker: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Map Twelve Data's quote schema to the internal quote normalizer schema."""
+    return {
+        "c": payload.get("close") or payload.get("price") or payload.get("last"),
+        "dp": payload.get("percent_change") or payload.get("change_percent") or payload.get("change"),
+        "volume": payload.get("volume"),
+        "datetime": payload.get("datetime"),
+        "symbol": payload.get("symbol", ticker),
+    }
+
+
 def normalize_provider_payloads(ticker: str, payloads: dict[str, Any]) -> IngestResult:
     out: list[Evidence] = []
     errors: dict[str, str] = {}
@@ -63,6 +72,8 @@ def normalize_provider_payloads(ticker: str, payloads: dict[str, Any]) -> Ingest
         try:
             if isinstance(payload, dict) and ("Global Quote" in payload or "c" in payload):
                 out.append(normalize_quote(ticker, payload, source))
+            elif isinstance(payload, dict) and source.startswith("twelve-data") and ("close" in payload or "price" in payload):
+                out.append(normalize_quote(ticker, _normalize_twelve_quote(ticker, payload), source))
             elif source.endswith("_analyst"):
                 ev = normalize_analyst_recommendations(ticker, payload if isinstance(payload, list) else [])
                 if ev:

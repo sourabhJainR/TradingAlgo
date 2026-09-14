@@ -55,16 +55,27 @@ def normalize_companyfacts(ticker: str, payload: dict[str, Any]) -> list[Financi
 
 
 def analyze_fundamentals(ticker: str, market: str) -> dict[str, Any]:
-    """Use a free public endpoint for current ratios and expose only influential drivers."""
+    """Use free public data for ratios and expose only metrics that materially influence the score."""
     symbol = ticker.upper().strip()
     if market.lower() == "india" and "." not in symbol:
         symbol = f"{symbol}.NS"
     modules = "summaryDetail,defaultKeyStatistics,financialData,summaryProfile"
-    url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules={modules}"
     try:
-        response = httpx.get(url, timeout=8.0, headers={"User-Agent": "TradingAlgo/0.2"})
-        response.raise_for_status()
-        result = response.json().get("quoteSummary", {}).get("result") or []
+        with httpx.Client(timeout=8.0, headers={"User-Agent": "Mozilla/5.0 TradingAlgo/0.2"}) as client:
+            crumb = ""
+            try:
+                client.get("https://fc.yahoo.com/consent")
+                crumb_response = client.get("https://query1.finance.yahoo.com/v1/test/getcrumb")
+                if crumb_response.is_success:
+                    crumb = crumb_response.text.strip()
+            except httpx.HTTPError:
+                pass
+            params = {"modules": modules, "formatted": "false", "lang": "en-US", "region": "US", "corsDomain": "finance.yahoo.com"}
+            if crumb:
+                params["crumb"] = crumb
+            response = client.get(f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}", params=params)
+            response.raise_for_status()
+            result = response.json().get("quoteSummary", {}).get("result") or []
         if not result:
             return _empty("No fundamental data returned")
         raw = result[0]

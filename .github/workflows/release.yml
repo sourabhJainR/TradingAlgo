@@ -11,18 +11,20 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
+    name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: tradingalgo-linux-x64
+            platform: linux-x64
           - os: windows-latest
-            artifact: tradingalgo-windows-x64.exe
+            platform: windows-x64
+          - os: macos-13
+            platform: macos-x64
           - os: macos-latest
-            artifact: tradingalgo-macos-arm64
+            platform: macos-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -32,25 +34,57 @@ jobs:
       - name: Install package and PyInstaller
         run: |
           python -m pip install --upgrade pip
-          python -m pip install . pyinstaller==6.16.0
+          python -m pip install ".[research]" pyinstaller==6.16.0
       - name: Build single-file executable
         run: python -m PyInstaller --clean --noconfirm packaging/tradingalgo.spec
       - name: Rename binary
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            mv dist/tradingalgo.exe "dist/${{ matrix.artifact }}"
+            mv dist/tradingalgo.exe "dist/tradingalgo-${{ matrix.platform }}.exe"
           else
-            mv dist/tradingalgo "dist/${{ matrix.artifact }}"
+            mv dist/tradingalgo "dist/tradingalgo-${{ matrix.platform }}"
+            chmod +x "dist/tradingalgo-${{ matrix.platform }}"
           fi
       - name: Smoke test
         shell: bash
-        run: ./dist/${{ matrix.artifact }} --help
-      - name: Upload build artifact
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./dist/tradingalgo-${{ matrix.platform }}.exe --help
+            ./dist/tradingalgo-${{ matrix.platform }}.exe web --help
+          else
+            ./dist/tradingalgo-${{ matrix.platform }} --help
+            ./dist/tradingalgo-${{ matrix.platform }} web --help
+          fi
+      - name: Build user bundle and checksum
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import zipfile
+
+          platform = "${{ matrix.platform }}"
+          dist = Path("dist")
+          binary = next(dist.glob(f"tradingalgo-{platform}*"))
+          bundle = dist / f"tradingalgo-{platform}.zip"
+          quickstart = Path("packaging/QUICKSTART.md")
+          checksum = hashlib.sha256(binary.read_bytes()).hexdigest()
+          checksum_file = dist / f"tradingalgo-{platform}.sha256"
+          checksum_file.write_text(f"{checksum}  {binary.name}\n", encoding="utf-8")
+          with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
+              archive.write(binary, binary.name)
+              archive.write(quickstart, "QUICKSTART.md")
+              archive.write(checksum_file, checksum_file.name)
+          print(bundle)
+          PY
+      - name: Upload downloadable bundle
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}
+          name: tradingalgo-${{ matrix.platform }}
+          path: |
+            dist/tradingalgo-${{ matrix.platform }}.zip
+            dist/tradingalgo-${{ matrix.platform }}.sha256
           if-no-files-found: error
 
   release:
@@ -62,8 +96,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release
+          pattern: tradingalgo-*
+          merge-multiple: true
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: release/**/*
+          files: |
+            release/*.zip
+            release/*.sha256

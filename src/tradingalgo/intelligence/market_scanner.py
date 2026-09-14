@@ -68,14 +68,13 @@ class MarketDiscovery:
             self.health.record_failure(provider)
             return DiscoveryResult((), None, {provider: str(exc)}, point_in_time)
 
-        rows = _rows(response.payload)
-        ranked = sorted(
-            (_candidate(row, provider, market) for row in rows),
-            key=lambda item: (item.score, item.ticker),
-            reverse=True,
-        )
-        candidates = tuple(item for item in ranked if item is not None)[:limit]
-        return DiscoveryResult(candidates, provider, {}, point_in_time)
+        candidates = [
+            candidate
+            for row in _rows(response.payload)
+            if (candidate := _candidate(row, provider, market)) is not None
+        ]
+        candidates.sort(key=lambda item: (item.score, item.ticker), reverse=True)
+        return DiscoveryResult(tuple(candidates[:limit]), provider, {}, point_in_time)
 
 
 def _rows(payload: Any) -> Iterable[dict[str, Any]]:

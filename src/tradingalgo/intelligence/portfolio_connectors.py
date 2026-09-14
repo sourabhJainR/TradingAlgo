@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from io import BytesIO
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -81,16 +81,16 @@ def _norm_name(value: Any) -> str:
     return " ".join(str(value).strip().lower().replace("_", " ").split())
 
 
-def _find_column(columns: list[Any], aliases: tuple[str, ...]) -> Any | None:
-    normalized = {_norm_name(column): column for column in columns}
+def _find_columns(columns: list[Any], aliases: tuple[str, ...]) -> list[Any]:
+    normalized = [(_norm_name(column), column) for column in columns]
+    found: list[Any] = []
     for alias in aliases:
-        if alias in normalized:
-            return normalized[alias]
-    return None
+        found.extend(column for name, column in normalized if name == alias and column not in found)
+    return found
 
 
 def _number(value: Any) -> float | None:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if value is None or pd.isna(value):
         return None
     text = str(value).strip().replace(",", "").replace("₹", "").replace("$", "")
     if text.endswith("%"):
@@ -101,47 +101,57 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _row_text(row: pd.Series, columns: list[Any], default: str = "") -> str:
+    for column in columns:
+        value = row.get(column)
+        if value is not None and not pd.isna(value) and str(value).strip():
+            return str(value).strip()
+    return default
+
+
+def _row_number(row: pd.Series, columns: list[Any]) -> float | None:
+    for column in columns:
+        value = _number(row.get(column))
+        if value is not None:
+            return value
+    return None
+
+
 def positions_from_dataframe(frame: pd.DataFrame, provider: str = "excel") -> PortfolioSnapshot:
     if frame.empty:
         raise ValueError("portfolio spreadsheet is empty")
     columns = list(frame.columns)
-    ticker_col = _find_column(columns, _ALIASES["ticker"])
-    if ticker_col is None:
+    ticker_cols = _find_columns(columns, _ALIASES["ticker"])
+    if not ticker_cols:
         raise ValueError("portfolio spreadsheet needs a ticker/symbol/security column")
-    quantity_col = _find_column(columns, _ALIASES["quantity"])
-    avg_col = _find_column(columns, _ALIASES["average_price"])
-    last_col = _find_column(columns, _ALIASES["last_price"])
-    invested_col = _find_column(columns, _ALIASES["invested_value"])
-    current_col = _find_column(columns, _ALIASES["current_value"])
-    pnl_col = _find_column(columns, _ALIASES["pnl"])
-    pnl_pct_col = _find_column(columns, _ALIASES["pnl_pct"])
-    asset_col = _find_column(columns, _ALIASES["asset_class"])
-    currency_col = _find_column(columns, _ALIASES["currency"])
+    quantity_cols = _find_columns(columns, _ALIASES["quantity"])
+    avg_cols = _find_columns(columns, _ALIASES["average_price"])
+    last_cols = _find_columns(columns, _ALIASES["last_price"])
+    invested_cols = _find_columns(columns, _ALIASES["invested_value"])
+    current_cols = _find_columns(columns, _ALIASES["current_value"])
+    pnl_cols = _find_columns(columns, _ALIASES["pnl"])
+    pnl_pct_cols = _find_columns(columns, _ALIASES["pnl_pct"])
+    asset_cols = _find_columns(columns, _ALIASES["asset_class"])
+    currency_cols = _find_columns(columns, _ALIASES["currency"])
 
     positions: list[PortfolioPosition] = []
     warnings: list[str] = []
     for row_number, row in frame.iterrows():
-        ticker = str(row.get(ticker_col, "")).strip().upper()
+        ticker = _row_text(row, ticker_cols).upper()
         if not ticker or ticker == "NAN":
             continue
-        quantity = _number(row.get(quantity_col)) if quantity_col is not None else None
-        average_price = _number(row.get(avg_col)) if avg_col is not None else None
-        last_price = _number(row.get(last_col)) if last_col is not None else None
-        invested_value = _number(row.get(invested_col)) if invested_col is not None else None
-        current_value = _number(row.get(current_col)) if current_col is not None else None
-        if quantity is None:
-            quantity = 0.0
+        quantity = _row_number(row, quantity_cols) or 0.0
         position = PortfolioPosition(
             ticker=ticker,
             quantity=quantity,
-            average_price=average_price,
-            last_price=last_price,
-            invested_value=invested_value,
-            current_value=current_value,
-            pnl=_number(row.get(pnl_col)) if pnl_col is not None else None,
-            pnl_pct=_number(row.get(pnl_pct_col)) if pnl_pct_col is not None else None,
+            average_price=_row_number(row, avg_cols),
+            last_price=_row_number(row, last_cols),
+            invested_value=_row_number(row, invested_cols),
+            current_value=_row_number(row, current_cols),
+            pnl=_row_number(row, pnl_cols),
+            pnl_pct=_row_number(row, pnl_pct_cols),
             broker=provider,
-            asset_class=str(row.get(asset_col, "equity")).strip() if asset_col is not None else "equity",
+            asset_class=_row_text(row, asset_cols, "equity"),
         )
         if position.value() <= 0:
             warnings.append(f"row {row_number + 2}: {ticker} has no usable position value")
@@ -149,11 +159,7 @@ def positions_from_dataframe(frame: pd.DataFrame, provider: str = "excel") -> Po
         positions.append(position)
     if not positions:
         raise ValueError("portfolio spreadsheet contains no usable positions")
-    currency = "INR"
-    if currency_col is not None:
-        values = [str(value).strip().upper() for value in frame[currency_col].dropna().tolist() if str(value).strip()]
-        if values:
-            currency = values[0]
+    currency = _row_text(frame.iloc[0], currency_cols, "INR").upper()
     return PortfolioSnapshot(provider=provider, positions=positions, currency=currency, source="spreadsheet", warnings=warnings)
 
 

@@ -6,6 +6,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from tradingalgo.data.sources import SourceConfig
+from tradingalgo.intelligence.research_suite import (
+    alert_signals,
+    backtest_symbol,
+    portfolio_diagnostics,
+    screen_analyses,
+)
 from tradingalgo.intelligence.technical_analytics import position_size
 
 from .market_recommendations import asdict as market_asdict, recommend_market
@@ -96,6 +102,135 @@ class ResearchHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send(500, "application/json", json.dumps({"error": f"market recommendation failed: {exc}"}))
             return
+        if parsed.path == "/api/screen":
+            try:
+                tickers = _csv(query.get("tickers", [""])[0])
+                market = query.get("market", ["US"])[0]
+                horizon = query.get("horizon", ["short"])[0]
+                if not tickers:
+                    raise ValueError("tickers is required")
+                if len(tickers) > 25:
+                    raise ValueError("screen supports at most 25 tickers per request")
+                cfg = SourceConfig.from_env()
+                analyses = []
+                warnings = []
+                for ticker in tickers:
+                    try:
+                        analyses.append(analyze_stock(ticker, market, horizon, cfg))
+                    except Exception as exc:
+                        warnings.append(f"{ticker}: {exc}")
+                selected = screen_analyses(
+                    analyses,
+                    min_score=_float_query(query, "min_score"),
+                    min_confidence=_float_query(query, "min_confidence"),
+                    action=query.get("action", [""])[0] or None,
+                    min_rsi=_float_query(query, "min_rsi"),
+                    max_rsi=_float_query(query, "max_rsi"),
+                    max_drawdown=_float_query(query, "max_drawdown"),
+                    breakout_only=_bool_query(query, "breakout_only"),
+                )
+                self._send(200, "application/json", json.dumps({
+                    "market": market,
+                    "horizon": horizon,
+                    "scanned": len(analyses),
+                    "matched": len(selected),
+                    "results": [_asdict(item) for item in selected],
+                    "warnings": warnings,
+                    "advisory_only": True,
+                }))
+            except ValueError as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}))
+            except Exception as exc:
+                self._send(500, "application/json", json.dumps({"error": f"screen failed: {exc}"}))
+            return
+        if parsed.path == "/api/backtest":
+            try:
+                ticker = query.get("ticker", [""])[0]
+                market = query.get("market", ["US"])[0]
+                strategy = query.get("strategy", ["sma_cross"])[0]
+                days = int(query.get("days", ["750"])[0])
+                if days < 100 or days > 5000:
+                    raise ValueError("days must be between 100 and 5000")
+                result = backtest_symbol(ticker, market, strategy, days)
+                self._send(200, "application/json", json.dumps({**result.__dict__, "advisory_only": True, "note": "Historical simulation only; brokerage, taxes and slippage are not modeled."}))
+            except ValueError as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}))
+            except Exception as exc:
+                self._send(500, "application/json", json.dumps({"error": f"backtest failed: {exc}"}))
+            return
+        if parsed.path == "/api/portfolio":
+            try:
+                market = query.get("market", ["US"])[0]
+                horizon = query.get("horizon", ["long"])[0]
+                holdings = _weights(query.get("holdings", [""])[0])
+                if not holdings:
+                    raise ValueError("holdings is required, for example NVDA:30,MSFT:25,AVGO:20")
+                if len(holdings) > 25:
+                    raise ValueError("portfolio supports at most 25 holdings")
+                cfg = SourceConfig.from_env()
+                analyses = []
+                warnings = []
+                for ticker in holdings:
+                    try:
+                        analyses.append(analyze_stock(ticker, market, horizon, cfg))
+                    except Exception as exc:
+                        warnings.append(f"{ticker}: {exc}")
+                result = portfolio_diagnostics(holdings, analyses)
+                result.update({"market": market, "horizon": horizon, "warnings": warnings})
+                self._send(200, "application/json", json.dumps(result))
+            except ValueError as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}))
+            except Exception as exc:
+                self._send(500, "application/json", json.dumps({"error": f"portfolio analysis failed: {exc}"}))
+            return
+        if parsed.path == "/api/alerts":
+            try:
+                ticker = query.get("ticker", [""])[0]
+                market = query.get("market", ["US"])[0]
+                horizon = query.get("horizon", ["short"])[0]
+                cfg = SourceConfig.from_env()
+                analysis = analyze_stock(ticker, market, horizon, cfg)
+                self._send(200, "application/json", json.dumps({
+                    "ticker": ticker.upper(),
+                    "analysis": _asdict(analysis),
+                    "alerts": alert_signals(analysis),
+                    "advisory_only": True,
+                }))
+            except ValueError as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}))
+            except Exception as exc:
+                self._send(500, "application/json", json.dumps({"error": f"alert analysis failed: {exc}"}))
+            return
+        if parsed.path == "/api/pulse":
+            try:
+                market = query.get("market", ["US"])[0]
+                horizon = query.get("horizon", ["short"])[0]
+                result = recommend_market(market, horizon, limit=25, recommendations=25)
+                rows = list(result.recommendations)
+                bullish = sum(item.action == "BUY" for item in rows)
+                watch = sum(item.action == "WATCH" for item in rows)
+                avoid = sum(item.action == "AVOID" for item in rows)
+                avg_score = sum(item.score for item in rows) / len(rows) if rows else 0.0
+                avg_confidence = sum(item.confidence for item in rows) / len(rows) if rows else 0.0
+                breakouts = sum((item.technical_signals or {}).get("breakout_20d") == "yes" for item in rows)
+                self._send(200, "application/json", json.dumps({
+                    "market": result.market,
+                    "horizon": result.horizon,
+                    "sample": len(rows),
+                    "buy": bullish,
+                    "watch": watch,
+                    "avoid": avoid,
+                    "buy_pct": round(bullish / len(rows) * 100.0, 2) if rows else 0.0,
+                    "average_score": round(avg_score, 2),
+                    "average_confidence": round(avg_confidence, 4),
+                    "breakout_count": breakouts,
+                    "provider": result.discovery_provider,
+                    "note": "Pulse is calculated from the analyzed discovery sample, not the full exchange universe.",
+                    "advisory_only": True,
+                }))
+            except Exception as exc:
+                self._send(500, "application/json", json.dumps({"error": f"market pulse failed: {exc}"}))
+            return
         if parsed.path in {"/", "/index.html"}:
             self._send(200, "text/html; charset=utf-8", (STATIC / "index.html").read_text(encoding="utf-8"))
             return
@@ -107,6 +242,28 @@ class ResearchHandler(BaseHTTPRequestHandler):
 
 def _csv(value: str) -> list[str]:
     return [item.strip().upper() for item in value.split(",") if item.strip()]
+
+
+def _weights(value: str) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for item in _csv(value):
+        if ":" not in item:
+            continue
+        ticker, weight = item.split(":", 1)
+        try:
+            result[ticker.strip().upper()] = float(weight)
+        except ValueError:
+            continue
+    return result
+
+
+def _float_query(query: dict[str, list[str]], key: str) -> float | None:
+    value = query.get(key, [""])[0]
+    return float(value) if value else None
+
+
+def _bool_query(query: dict[str, list[str]], key: str) -> bool:
+    return query.get(key, ["false"])[0].strip().lower() in {"1", "true", "yes", "on"}
 
 
 def serve(host: str = "127.0.0.1", port: int = 8080) -> None:

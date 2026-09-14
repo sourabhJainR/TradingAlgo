@@ -2,8 +2,8 @@
 
 Discovery is intentionally separate from full security analysis: a configured
 provider supplies a point-in-time candidate universe, the scanner ranks that
-universe using transparent pre-screen factors, and only the shortlist is sent
-to the normal evidence-backed orchestrator.
+universe using transparent horizon-specific factors, and only the shortlist is
+sent to the normal evidence-backed orchestrator.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable
 
 from ..data.health import ProviderHealthRegistry
 from ..data.providers import ProviderResponse
+from .discovery_scoring import DiscoveryPolicy, passes_filters, score_row
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ class MarketDiscovery:
         market: str = "global",
         limit: int = 10,
         as_of: datetime | None = None,
+        horizon: str = "short",
+        min_evidence: int = 0,
     ) -> DiscoveryResult:
         point_in_time = as_of or datetime.now(timezone.utc)
         if point_in_time.tzinfo is None:
@@ -57,6 +60,10 @@ class MarketDiscovery:
 
         if limit < 1:
             raise ValueError("limit must be at least 1")
+        if horizon.strip().lower() not in {"short", "long"}:
+            raise ValueError("horizon must be short or long")
+        if min_evidence < 0:
+            raise ValueError("min_evidence cannot be negative")
 
         if not self.health.get(provider).available:
             return DiscoveryResult((), None, {provider: "provider health gate is open"}, point_in_time)
@@ -68,11 +75,13 @@ class MarketDiscovery:
             self.health.record_failure(provider)
             return DiscoveryResult((), None, {provider: str(exc)}, point_in_time)
 
-        candidates = [
-            candidate
-            for row in _rows(response.payload)
-            if (candidate := _candidate(row, provider, market)) is not None
-        ]
+        policy = DiscoveryPolicy(horizon=horizon, min_evidence=min_evidence)
+        candidates: list[MarketCandidate] = []
+        for row in _rows(response.payload):
+            candidate = _candidate(row, provider, market, policy)
+            if candidate is not None:
+                candidates.append(candidate)
+
         candidates.sort(key=lambda item: (item.score, item.ticker), reverse=True)
         return DiscoveryResult(tuple(candidates[:limit]), provider, {}, point_in_time)
 
@@ -88,40 +97,32 @@ def _rows(payload: Any) -> Iterable[dict[str, Any]]:
     return ()
 
 
-def _number(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _candidate(row: dict[str, Any], provider: str, default_market: str) -> MarketCandidate | None:
+def _candidate(row: dict[str, Any], provider: str, default_market: str, policy: DiscoveryPolicy) -> MarketCandidate | None:
     ticker = str(row.get("ticker") or row.get("symbol") or "").strip().upper()
     if not ticker:
         return None
 
-    factors = {
-        "momentum": _number(row.get("momentum"), _number(row.get("relative_strength"))),
-        "trend": _number(row.get("trend"), _number(row.get("trend_score"))),
-        "fundamentals": _number(row.get("fundamentals"), _number(row.get("fundamental_score"))),
-        "catalyst": _number(row.get("catalyst"), _number(row.get("catalyst_score"))),
-        "liquidity": _number(row.get("liquidity"), _number(row.get("liquidity_score"))),
-        "risk": _number(row.get("risk"), _number(row.get("risk_score"))),
-    }
+    accepted, filter_reasons = passes_filters(row, policy)
+    # Legacy catalog rows may not carry price/volume/evidence metadata. Do not
+    # manufacture those values; the full-analysis evidence gate remains the
+    # final publication gate in the recommendation service.
+    if policy.min_evidence > 0 and "minimum evidence filter" in filter_reasons:
+        return None
+    if not accepted and filter_reasons:
+        return None
+
     supplied_score = row.get("score")
     if supplied_score is not None:
-        score = _number(supplied_score)
+        try:
+            score = float(supplied_score)
+        except (TypeError, ValueError):
+            score, factors = score_row(row, policy)
+        else:
+            _, factors = score_row(row, policy)
     else:
-        score = (
-            factors["momentum"] * 0.25
-            + factors["trend"] * 0.20
-            + factors["fundamentals"] * 0.20
-            + factors["catalyst"] * 0.15
-            + factors["liquidity"] * 0.10
-            - factors["risk"] * 0.10
-        )
+        score, factors = score_row(row, policy)
 
-    rationale = str(row.get("rationale") or row.get("reason") or "Ranked by configured market-screen factors.")
+    rationale = str(row.get("rationale") or row.get("reason") or _rationale(policy, factors))
     return MarketCandidate(
         ticker=ticker,
         market=str(row.get("market") or default_market),
@@ -131,3 +132,9 @@ def _candidate(row: dict[str, Any], provider: str, default_market: str) -> Marke
         factors=factors,
         source=provider,
     )
+
+
+def _rationale(policy: DiscoveryPolicy, factors: dict[str, float]) -> str:
+    ranked = sorted(factors.items(), key=lambda item: item[1], reverse=True)
+    leaders = ", ".join(f"{name}={value:.0f}" for name, value in ranked[:3])
+    return f"{policy.horizon.title()}-term factor model; strongest factors: {leaders}."

@@ -9,6 +9,16 @@ from ..data.providers import ProviderResponse
 from ..data.sources import NsePublicSource
 
 
+def twelve_data_universe(provider: Any, *, market: str) -> Callable[[], ProviderResponse]:
+    """Compatibility adapter retained for legacy callers; not used by recommendations."""
+    normalized = market.lower()
+    if normalized in {"us", "usa", "united-states", "global"}:
+        return lambda: provider.stocks(country="United States")
+    if normalized in {"india", "in"}:
+        return lambda: provider.stocks(country="India")
+    raise ValueError(f"Unsupported Twelve Data market: {market}")
+
+
 def nse_public_universe(provider: NsePublicSource, *, index: str = "NIFTY 500") -> Callable[[], ProviderResponse]:
     """Return a free NSE universe enriched with sector-relative and regime factors."""
     def fetch() -> ProviderResponse:
@@ -36,30 +46,19 @@ def nse_public_universe(provider: NsePublicSource, *, index: str = "NIFTY 500") 
             volume = _float(row.get("totalTradedVolume") or row.get("totalTradedValue"))
             price = _float(row.get("lastPrice"))
             normalized.append({
-                "ticker": row.get("symbol"),
-                "market": "india",
+                "ticker": row.get("symbol"), "market": "india",
                 "name": (row.get("meta") or {}).get("companyName") or row.get("symbol"),
-                "price": price,
-                "volume": volume,
-                "dollar_volume": volume * price,
-                "momentum": change,
-                "trend": _trend_score(row),
-                "sector": sector,
-                "sector_relative_strength": relative,
-                "market_regime": regime,
-                "liquidity": _liquidity_score(volume),
-                "evidence_count": 5,
+                "price": price, "volume": volume, "dollar_volume": volume * price,
+                "momentum": change, "trend": _trend_score(row), "sector": sector,
+                "sector_relative_strength": relative, "market_regime": regime,
+                "liquidity": _liquidity_score(volume), "evidence_count": 5,
             })
         return ProviderResponse(response.provider, response.endpoint, response.fetched_at, normalized, response.freshness)
     return fetch
 
 
 def alpha_vantage_universe(provider: AlphaVantageProvider, *, market: str) -> Callable[[], ProviderResponse]:
-    """Return a free Alpha Vantage US mover universe.
-
-    Alpha Vantage documents a free API tier; this adapter does not require any
-    paid-only endpoint. India discovery intentionally uses the public NSE source.
-    """
+    """Return a free Alpha Vantage US mover universe."""
     if market.lower() not in {"us", "usa", "united-states"}:
         raise ValueError("Alpha Vantage mover discovery currently supports US equities only")
 
@@ -80,14 +79,11 @@ def alpha_vantage_universe(provider: AlphaVantageProvider, *, market: str) -> Ca
                     price = _float(row.get("price"))
                     rows.append({
                         "ticker": row.get("ticker"), "market": "us", "name": row.get("ticker"),
-                        "price": price, "volume": volume,
-                        "dollar_volume": price * volume,
+                        "price": price, "volume": volume, "dollar_volume": price * volume,
                         "momentum": change, "trend": 50.0 + change * 2.5,
-                        "relative_strength": 50.0 + change * 2.0,
-                        "market_regime": 50.0,
-                        "liquidity": _liquidity_score(volume),
-                        "catalyst": max(0.0, change), "risk": max(0.0, -change),
-                        "evidence_count": 5,
+                        "relative_strength": 50.0 + change * 2.0, "market_regime": 50.0,
+                        "liquidity": _liquidity_score(volume), "catalyst": max(0.0, change),
+                        "risk": max(0.0, -change), "evidence_count": 5,
                     })
         return ProviderResponse(response.provider, response.endpoint, response.fetched_at, rows, response.freshness)
     return fetch

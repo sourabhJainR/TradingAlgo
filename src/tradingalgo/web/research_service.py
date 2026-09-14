@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from tradingalgo.data.candles import alpha_vantage_daily, finnhub_candles, nse_historical
 from tradingalgo.data.sources import AlphaVantageSource, FinnhubSource, NsePublicSource, SourceConfig
 from tradingalgo.intelligence.technical_analytics import analyze as analyze_technical
-
-from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -118,7 +116,7 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
     market_view = _market_view(metrics)
     sector_news = _news_lines(news, sector)
     risks = _risks(metrics, market_view, news, warnings)
-    basis = _basis(metrics, horizon_key, market_view, sector_news, technical_signals)
+    basis = _basis(metrics, horizon_key, market_view, technical_signals)
     hypothesis = _hypothesis(action, metrics, horizon_key)
 
     return StockAnalysis(
@@ -203,11 +201,7 @@ def _score(m: dict[str, float], horizon: str) -> float:
     if not m:
         return 0.0
     p = m["price"]
-    score = (
-        (30 if p > m["sma20"] else -30)
-        + (25 if p > m["sma50"] else -25)
-        + (25 if p > m["sma200"] else -25)
-    )
+    score = ((30 if p > m["sma20"] else -30) + (25 if p > m["sma50"] else -25) + (25 if p > m["sma200"] else -25))
     score += 20 if (p > m["high20"] * 0.98 if horizon == "short" else p > m["sma50"]) else -20
     return max(-100.0, min(100.0, score))
 
@@ -264,7 +258,7 @@ def _news_lines(news: list[dict[str, Any]], sector: str) -> list[str]:
     return lines or [f"No recent {sector + ' ' if sector else ''}news was returned by the configured provider."]
 
 
-def _basis(m: dict[str, float], horizon: str, market_view: str, news: list[str], signals: dict[str, Any]) -> list[str]:
+def _basis(m: dict[str, float], horizon: str, market_view: str, signals: dict[str, Any]) -> list[str]:
     if not m:
         return ["Insufficient market-price history; no technical prediction is asserted."]
     basis = [

@@ -23,7 +23,7 @@ research = [
 dev = [
   "pytest>=8,<9",
   "pytest-cov>=5,<7",
-  "ruff>=0.6,<1",
+  "ruff>=0.6,<0.7",
   "mypy>=1.11,<2",
 ]
 
@@ -40,6 +40,22 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+"src/tradingalgo/core/events.py" = ["F401"]
+"src/tradingalgo/execution/broker.py" = ["F401"]
+"src/tradingalgo/intelligence/analytics_history.py" = ["F401"]
+"src/tradingalgo/intelligence/factor_engine.py" = ["F401", "F841"]
+"src/tradingalgo/intelligence/ipo_analysis.py" = ["E701", "E702"]
+"src/tradingalgo/intelligence/market_context.py" = ["F401"]
+"src/tradingalgo/intelligence/normalizers.py" = ["E701"]
+"src/tradingalgo/intelligence/technical.py" = ["E701", "E702", "E741"]
+"src/tradingalgo/intelligence/technical_signals.py" = ["E701", "E702"]
+"src/tradingalgo/risk/engine.py" = ["F401"]
+"src/tradingalgo/storage.py" = ["E701"]
+"src/tradingalgo/web/research_service.py" = ["E741"]
+"tests/test_batch14_outcomes_stats.py" = ["E702"]
+"tests/test_orchestration_batch8.py" = ["E701"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TradingAlgo Research</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:1100px;margin:32px auto;padding:0 18px;background:#f6f7f9;color:#18202a}
+header{margin-bottom:22px} h1{margin:0 0 6px} .muted{color:#687384}
+.card{background:white;border:1px solid #dce1e8;border-radius:12px;padding:18px;margin:14px 0;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+form{display:grid;grid-template-columns:1.3fr 1fr 1fr auto;gap:10px}input,select,button{font:inherit;padding:11px;border:1px solid #c9d0d9;border-radius:8px}button{background:#18202a;color:white;cursor:pointer}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{border:1px solid #e0e4ea;border-radius:9px;padding:12px}.metric b{display:block;font-size:21px;margin-top:4px}
+ul{margin:8px 0 0;padding-left:20px}.pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#edf1f5;font-weight:600}
+pre{white-space:pre-wrap}.error{color:#a33}@media(max-width:760px){form,.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><h1>TradingAlgo Research</h1><div class="muted">Ask for a US or Indian stock setup. Research only; no orders are placed.</div></header>
+<div class="card">
+<form id="form">
+<input id="ticker" placeholder="Ticker, e.g. NVDA or RELIANCE" required>
+<select id="market"><option value="US">US market</option><option value="India">Indian market</option></select>
+<select id="horizon"><option value="short">Short term</option><option value="long">Long term</option></select>
+<button>Analyze</button>
+</form>
+</div>
+<div id="result"></div>
+<script>
+const form=document.getElementById('form'), result=document.getElementById('result');
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const list=a=>(a||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+form.addEventListener('submit',async e=>{
+ e.preventDefault(); result.innerHTML='<div class="card">Running analysis...</div>';
+ const q=new URLSearchParams({ticker:document.getElementById('ticker').value,market:document.getElementById('market').value,horizon:document.getElementById('horizon').value});
+ try{
+  const r=await fetch('/api/analyze?'+q); const d=await r.json(); if(!r.ok) throw new Error(d.error||'Analysis failed');
+  result.innerHTML=`<div class="card"><span class="pill">${esc(d.action)}</span><h2>${esc(d.ticker)} — ${esc(d.horizon)}</h2>
+  <div class="grid"><div class="metric">Last price<b>${d.last_price??'N/A'}</b></div><div class="metric">Score<b>${d.score}</b></div><div class="metric">Confidence<b>${d.confidence}</b></div>
+  <div class="metric">Buy range<b>${d.buy_range?d.buy_range.join(' - '):'N/A'}</b></div><div class="metric">Stop loss<b>${d.stop_loss??'N/A'}</b></div><div class="metric">Targets<b>${d.targets?d.targets.join(' / '):'N/A'}</b></div></div></div>
+  <div class="card"><h3>Hypothesis</h3><p>${esc(d.hypothesis)}</p><h3>Prediction basis</h3><ul>${list(d.prediction_basis)}</ul></div>
+  <div class="card"><h3>Market context</h3><p>${esc(d.favorable_market)}</p><h3>Sector or company news</h3><ul>${list(d.sector_news)}</ul></div>
+  <div class="card"><h3>Risks</h3><ul>${list(d.risks)}</ul><h3>Data sources</h3><ul>${list(d.data_sources)}</ul>${d.warnings?.length?'<h3>Data warnings</h3><ul>'+list(d.warnings)+'</ul>':''}</div>`;
+ }catch(err){result.innerHTML=`<div class="card error">${esc(err.message)}</div>`}
+});
+</script>
+</body>
+</html>

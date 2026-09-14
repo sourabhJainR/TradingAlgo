@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 
 @dataclass(frozen=True)
 class FinancialFact:
@@ -28,16 +30,10 @@ def normalize_companyfacts(ticker: str, payload: dict[str, Any]) -> list[Financi
     facts = payload.get("facts", {})
     result: list[FinancialFact] = []
     preferred = {
-        "Revenue": ("USD",),
-        "Revenues": ("USD",),
-        "SalesRevenueNet": ("USD",),
-        "NetIncomeLoss": ("USD",),
-        "Assets": ("USD",),
-        "Liabilities": ("USD",),
-        "StockholdersEquity": ("USD",),
-        "CashAndCashEquivalentsAtCarryingValue": ("USD",),
-        "LongTermDebtNoncurrent": ("USD",),
-        "EarningsPerShareDiluted": ("USD/shares", "USD/shares"),
+        "Revenue": ("USD",), "Revenues": ("USD",), "SalesRevenueNet": ("USD",),
+        "NetIncomeLoss": ("USD",), "Assets": ("USD",), "Liabilities": ("USD",),
+        "StockholdersEquity": ("USD",), "CashAndCashEquivalentsAtCarryingValue": ("USD",),
+        "LongTermDebtNoncurrent": ("USD",), "EarningsPerShareDiluted": ("USD/shares",),
     }
     for namespace in ("us-gaap", "dei"):
         for concept_name, concept in facts.get(namespace, {}).items():
@@ -56,3 +52,106 @@ def normalize_companyfacts(ticker: str, payload: dict[str, Any]) -> list[Financi
             result.append(FinancialFact(ticker=ticker.upper(), concept=concept_name, value=value, unit=unit,
                 period_end=str(row["end"]), filing_date=row.get("filed"), form=row.get("form"), accession=row.get("accn")))
     return result
+
+
+def analyze_fundamentals(ticker: str, market: str) -> dict[str, Any]:
+    """Use a free public endpoint for current ratios and expose only influential drivers."""
+    symbol = ticker.upper().strip()
+    if market.lower() == "india" and "." not in symbol:
+        symbol = f"{symbol}.NS"
+    modules = "summaryDetail,defaultKeyStatistics,financialData,summaryProfile"
+    url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules={modules}"
+    try:
+        response = httpx.get(url, timeout=8.0, headers={"User-Agent": "TradingAlgo/0.2"})
+        response.raise_for_status()
+        result = response.json().get("quoteSummary", {}).get("result") or []
+        if not result:
+            return _empty("No fundamental data returned")
+        raw = result[0]
+        detail, stats, financial, profile = raw.get("summaryDetail", {}), raw.get("defaultKeyStatistics", {}), raw.get("financialData", {}), raw.get("summaryProfile", {})
+
+        def val(section: dict[str, Any], key: str) -> float | None:
+            item = section.get(key)
+            if isinstance(item, dict):
+                item = item.get("raw")
+            try:
+                return float(item) if item is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        trailing_pe, forward_pe = val(detail, "trailingPE"), val(detail, "forwardPE")
+        roe, roa = val(financial, "returnOnEquity"), val(financial, "returnOnAssets")
+        margin, operating_margin = val(financial, "profitMargins"), val(financial, "operatingMargins")
+        revenue_growth, earnings_growth = val(financial, "revenueGrowth"), val(financial, "earningsGrowth")
+        debt_to_equity, current_ratio = val(financial, "debtToEquity"), val(financial, "currentRatio")
+        price_to_book, peg = val(stats, "priceToBook"), val(stats, "pegRatio")
+        ev_to_ebitda = val(detail, "enterpriseToEbitda")
+        total_revenue, total_assets = val(financial, "totalRevenue"), val(financial, "totalAssets")
+        current_liabilities = val(financial, "totalCurrentLiabilities")
+        roce = None
+        roce_basis = "not available"
+        if operating_margin is not None and total_revenue and total_assets is not None and current_liabilities is not None:
+            capital_employed = total_assets - current_liabilities
+            if capital_employed > 0:
+                roce = (operating_margin * total_revenue) / capital_employed
+                roce_basis = "estimated from operating margin and capital employed"
+
+        ratios = {
+            "pe_ratio": trailing_pe, "forward_pe": forward_pe, "pb_ratio": price_to_book, "peg_ratio": peg,
+            "roce": roce, "roce_basis": roce_basis, "roe": roe, "roa": roa,
+            "profit_margin": margin, "operating_margin": operating_margin, "revenue_growth": revenue_growth,
+            "earnings_growth": earnings_growth, "debt_to_equity": debt_to_equity, "current_ratio": current_ratio,
+            "ev_to_ebitda": ev_to_ebitda, "sector": profile.get("industry") or profile.get("sector"),
+        }
+        score, drivers = _score(ratios)
+        return {"available": True, "score": round(score, 2), "ratios": ratios,
+                "influential_metrics": drivers, "warnings": [], "source": "Yahoo Finance public quoteSummary endpoint"}
+    except Exception as exc:
+        return _empty(f"Fundamental data unavailable: {exc}")
+
+
+def _empty(warning: str) -> dict[str, Any]:
+    return {"available": False, "score": 0.0, "ratios": {}, "influential_metrics": [], "warnings": [warning], "source": ""}
+
+
+def _score(r: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
+    score = 0.0
+    drivers: list[dict[str, Any]] = []
+
+    def add(metric: str, value: float | None, points: float, reason: str, percent: bool = False) -> None:
+        nonlocal score
+        if value is None:
+            return
+        score += points
+        if abs(points) >= 5:
+            drivers.append({"metric": metric, "value": round(value * 100, 2) if percent else round(value, 2), "impact": round(points, 2), "reason": reason})
+
+    roe = r.get("roe")
+    if isinstance(roe, (int, float)):
+        add("ROE", roe, 20 if roe >= .20 else 10 if roe >= .15 else -15 if roe < .08 else 0, "Strong shareholder return" if roe >= .15 else "Weak shareholder return", True)
+    roce = r.get("roce")
+    if isinstance(roce, (int, float)):
+        add("ROCE", roce, 20 if roce >= .20 else 10 if roce >= .12 else -15 if roce < .08 else 0, "Strong capital efficiency" if roce >= .12 else "Weak capital efficiency", True)
+    pe = r.get("pe_ratio")
+    if isinstance(pe, (int, float)) and pe > 0:
+        add("P/E", pe, 10 if pe < 15 else 5 if pe < 25 else -10 if pe > 40 else 0, "Low earnings valuation" if pe < 25 else "High earnings valuation")
+    fpe = r.get("forward_pe")
+    if isinstance(pe, (int, float)) and isinstance(fpe, (int, float)) and pe > 0 and fpe > 0:
+        delta = (fpe / pe) - 1
+        add("Forward P/E change", delta * 100, 8 if delta <= -.10 else -8 if delta >= .10 else 0, "Forward valuation improves" if delta <= -.10 else "Forward valuation worsens")
+    debt = r.get("debt_to_equity")
+    if isinstance(debt, (int, float)):
+        add("Debt/Equity", debt, 8 if debt < 50 else -15 if debt > 150 else 0, "Low balance-sheet leverage" if debt < 50 else "High balance-sheet leverage")
+    growth = r.get("revenue_growth")
+    if isinstance(growth, (int, float)):
+        add("Revenue growth", growth, 10 if growth >= .15 else 5 if growth >= .05 else -10 if growth < 0 else 0, "Strong revenue growth" if growth >= .05 else "Revenue contraction", True)
+    earnings = r.get("earnings_growth")
+    if isinstance(earnings, (int, float)):
+        add("Earnings growth", earnings, 10 if earnings >= .15 else 5 if earnings >= .05 else -10 if earnings < 0 else 0, "Strong earnings growth" if earnings >= .05 else "Earnings contraction", True)
+    margin = r.get("profit_margin")
+    if isinstance(margin, (int, float)):
+        add("Profit margin", margin, 8 if margin >= .15 else -8 if margin < .05 else 0, "Healthy profitability" if margin >= .15 else "Thin profitability", True)
+    peg = r.get("peg_ratio")
+    if isinstance(peg, (int, float)) and peg > 0:
+        add("PEG", peg, 8 if peg < 1 else -8 if peg > 2 else 0, "Growth-adjusted valuation is attractive" if peg < 1 else "Growth-adjusted valuation is stretched")
+    return max(-100.0, min(100.0, score)), sorted(drivers, key=lambda x: abs(x["impact"]), reverse=True)

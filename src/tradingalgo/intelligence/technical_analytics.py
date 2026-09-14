@@ -20,8 +20,7 @@ def _lows(candles: Sequence[Any]) -> list[float]:
 def _sma(values: Sequence[float], period: int) -> float | None:
     if not values:
         return None
-    window = values[-period:]
-    return mean(window)
+    return mean(values[-period:])
 
 
 def _ema(values: Sequence[float], period: int) -> float | None:
@@ -80,14 +79,17 @@ def _max_drawdown(closes: Sequence[float]) -> float:
 def _annualized_volatility(closes: Sequence[float]) -> float | None:
     if len(closes) < 3:
         return None
-    returns = [current / previous - 1.0 for previous, current in zip(closes[:-1], closes[1:], strict=True) if previous]
+    returns = [
+        current / previous - 1.0
+        for previous, current in zip(closes[:-1], closes[1:], strict=True)
+        if previous
+    ]
     return pstdev(returns) * sqrt(252.0) * 100.0 if len(returns) > 1 else None
 
 
 def analyze(candles: Sequence[Any]) -> dict[str, float | str | None]:
     closes = _closes(candles)
     highs = _highs(candles)
-    lows = _lows(candles)
     if not closes:
         return {}
     price = closes[-1]
@@ -108,9 +110,9 @@ def analyze(candles: Sequence[Any]) -> dict[str, float | str | None]:
     atr14 = _atr(candles, 14)
     rsi14 = _rsi(closes, 14)
     high20 = max(highs[-20:]) if highs else price
-    low20 = min(lows[-20:]) if lows else price
     high52 = max(highs[-252:]) if highs else price
-    low52 = min(lows[-252:]) if lows else price
+    low52 = min(closes[-252:]) if closes else price
+    volatility = _annualized_volatility(closes)
     return {
         "rsi14": round(rsi14, 2) if rsi14 is not None else None,
         "macd": round(macd, 4) if macd is not None else None,
@@ -119,7 +121,7 @@ def analyze(candles: Sequence[Any]) -> dict[str, float | str | None]:
         "bollinger_upper": round(upper, 2) if upper is not None else None,
         "bollinger_lower": round(lower, 2) if lower is not None else None,
         "atr14": round(atr14, 2) if atr14 is not None else None,
-        "volatility_annualized_pct": round(_annualized_volatility(closes), 2) if _annualized_volatility(closes) is not None else None,
+        "volatility_annualized_pct": round(volatility, 2) if volatility is not None else None,
         "max_drawdown_pct": round(_max_drawdown(closes), 2),
         "distance_from_52w_high_pct": round((price / high52 - 1.0) * 100.0, 2) if high52 else None,
         "distance_from_52w_low_pct": round((price / low52 - 1.0) * 100.0, 2) if low52 else None,

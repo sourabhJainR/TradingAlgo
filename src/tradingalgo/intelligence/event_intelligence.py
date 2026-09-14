@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -52,8 +52,68 @@ def analyze_events(ticker: str, market: str, limit: int = 30) -> dict[str, Any]:
         }
 
     rows = payload.get("articles", []) if isinstance(payload, dict) else []
+    signals = _classify_rows(rows[:limit])
+    raw = sum(item.impact for item in signals[:12])
+    score = max(-100.0, min(100.0, raw))
+    absolute = sum(abs(item.impact) for item in signals[:12])
+    return {
+        "available": True,
+        "score": round(score, 2),
+        "weight": round(min(35.0, absolute), 2),
+        "signals": [asdict(item) for item in signals[:12]],
+        "event_counts": _counts(signals),
+        "market": market,
+        "query": query,
+        "warnings": [],
+    }
+
+
+def analyze_sector_events(sector: str, market: str, limit: int = 30) -> dict[str, Any]:
+    """Fetch sector-level news/events separately from company-specific evidence."""
+    label = sector.strip()
+    if not label:
+        return {"available": False, "score": 0.0, "signals": [], "news": [], "warnings": ["Sector is not available"]}
+    source = GdeltSource()
+    query = f'"{label}" (orders OR earnings OR regulation OR lawsuit OR judgment OR sanctions OR tariff OR merger OR acquisition OR demand OR supply OR pricing OR geopolitical)'
+    try:
+        payload = source.news(query, max_records=limit).payload
+    except Exception as exc:
+        return {
+            "available": False,
+            "score": 0.0,
+            "signals": [],
+            "news": [],
+            "warnings": [f"GDELT sector feed unavailable: {exc}"],
+        }
+    rows = payload.get("articles", []) if isinstance(payload, dict) else []
+    signals = _classify_rows(rows[:limit])
+    raw = sum(item.impact for item in signals[:12])
+    news = [
+        {
+            "title": str(row.get("title") or row.get("name") or "").strip(),
+            "url": str(row.get("url") or row.get("url_mobile") or ""),
+            "source": str(row.get("domain") or "GDELT"),
+            "date": str(row.get("seendate") or row.get("date") or ""),
+        }
+        for row in rows[:8]
+        if str(row.get("title") or row.get("name") or "").strip()
+    ]
+    return {
+        "available": True,
+        "sector": label,
+        "market": market,
+        "score": round(max(-100.0, min(100.0, raw)), 2),
+        "signals": [asdict(item) for item in signals[:12]],
+        "news": news,
+        "event_counts": _counts(signals),
+        "query": query,
+        "warnings": [],
+    }
+
+
+def _classify_rows(rows: list[dict[str, Any]]) -> list[EventSignal]:
     signals: list[EventSignal] = []
-    for row in rows[:limit]:
+    for row in rows:
         title = str(row.get("title") or row.get("name") or "").strip()
         if not title:
             continue
@@ -80,21 +140,7 @@ def analyze_events(ticker: str, market: str, limit: int = 30) -> dict[str, Any]:
             source=str(row.get("domain") or "GDELT"),
             rationale=_rationale(event_type, direction),
         ))
-
-    signals = _dedupe(signals)
-    raw = sum(item.impact for item in signals[:12])
-    score = max(-100.0, min(100.0, raw))
-    absolute = sum(abs(item.impact) for item in signals[:12])
-    return {
-        "available": True,
-        "score": round(score, 2),
-        "weight": round(min(35.0, absolute), 2),
-        "signals": [asdict(item) for item in signals[:12]],
-        "event_counts": _counts(signals),
-        "market": market,
-        "query": query,
-        "warnings": [],
-    }
+    return _dedupe(signals)
 
 
 def _direction(text: str, default: int) -> int:

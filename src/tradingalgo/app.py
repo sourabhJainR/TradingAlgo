@@ -19,6 +19,13 @@ def run(mode: str = typer.Option("paper", help="backtest, paper, or live")) -> N
     typer.echo(f"TradingAlgo started in {mode} mode; execution gateway={type(gateway).__name__}")
 
 
+@app.command()
+def web(host: str = typer.Option("127.0.0.1"), port: int = typer.Option(8080, min=1, max=65535)) -> None:
+    """Start the research-only stock analysis web UI."""
+    from tradingalgo.web.app import serve
+    serve(host, port)
+
+
 def main() -> None:
     app()
 

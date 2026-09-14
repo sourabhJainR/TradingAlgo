@@ -127,4 +127,10 @@ def _stock_dict(item: StockAnalysis) -> dict[str, Any]:
         "data_sources": item.data_sources,
         "warnings": item.warnings,
         "technical_signals": item.technical_signals,
+        "fundamental_signals": item.fundamental_signals,
+        "event_signals": item.event_signals,
+        "score_weights": item.score_weights,
+        "score_components": item.score_components,
+        "next_move": item.next_move,
+        "next_move_probability": item.next_move_probability,
     }

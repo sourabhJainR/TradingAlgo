@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from tradingalgo.data.health import ProviderHealthRegistry
-from tradingalgo.data.market_apis import AlphaVantageProvider, TwelveDataProvider
-from tradingalgo.data.sources import SourceConfig
-from tradingalgo.intelligence.market_api_discovery import alpha_vantage_universe, twelve_data_universe
+from tradingalgo.data.market_apis import AlphaVantageProvider
+from tradingalgo.data.sources import NsePublicSource, SourceConfig
+from tradingalgo.intelligence.market_api_discovery import alpha_vantage_universe, nse_public_universe
 from tradingalgo.intelligence.market_scanner import MarketDiscovery
 
 from .research_service import StockAnalysis, analyze_stock
@@ -33,7 +33,12 @@ def recommend_market(
     recommendations: int = 5,
     config: SourceConfig | None = None,
 ) -> MarketRecommendations:
-    """Discover candidates, apply horizon scoring, then publish evidence-backed leaders."""
+    """Discover candidates, apply horizon scoring, then publish evidence-backed leaders.
+
+    The recommendation path uses only free/public market-data routes. India
+    always discovers from the public NSE universe; Alpha Vantage is used for
+    US discovery when its free API key is configured.
+    """
     if limit < 1 or recommendations < 1 or recommendations > limit:
         raise ValueError("limit and recommendations must be positive, with recommendations <= limit")
     market_key = market.strip().lower()
@@ -45,17 +50,19 @@ def recommend_market(
 
     cfg = config or SourceConfig.from_env()
     discovery = MarketDiscovery(ProviderHealthRegistry())
-    warnings: list[str] = []
-    if cfg.twelve_data_key:
-        provider = TwelveDataProvider(cfg.twelve_data_key)
-        fetch = twelve_data_universe(provider, market=market_key)
-        provider_name = "twelve-data"
-    elif cfg.alpha_vantage_key and market_key == "us":
+    if market_key == "india":
+        provider = NsePublicSource()
+        fetch = nse_public_universe(provider)
+        provider_name = "nse-public"
+    elif cfg.alpha_vantage_key:
         provider = AlphaVantageProvider(cfg.alpha_vantage_key)
-        fetch = alpha_vantage_universe(provider, market=market_key)
-        provider_name = "alpha-vantage"
+        fetch = alpha_vantage_universe(provider, market="us")
+        provider_name = "alpha-vantage-free-tier"
     else:
-        raise RuntimeError("Open-ended discovery requires TWELVE_DATA_API_KEY, or ALPHAVANTAGE_API_KEY for US discovery")
+        raise RuntimeError(
+            "US open-ended discovery requires ALPHAVANTAGE_API_KEY. "
+            "The application uses only Alpha Vantage's free API path; no paid provider is required."
+        )
 
     result = discovery.discover(
         fetch,
@@ -63,6 +70,7 @@ def recommend_market(
         market=market_key,
         limit=limit,
         horizon=horizon_key,
+        min_evidence=3,
     )
     if result.errors:
         raise RuntimeError("Market discovery failed: " + "; ".join(f"{k}: {v}" for k, v in result.errors.items()))
@@ -70,6 +78,7 @@ def recommend_market(
         raise RuntimeError("Market discovery returned no candidates")
 
     analyzed: list[tuple[float, StockAnalysis]] = []
+    warnings: list[str] = []
     for candidate in result.candidates:
         try:
             analysis = analyze_stock(candidate.ticker, market_key, horizon_key, cfg)
@@ -77,15 +86,15 @@ def recommend_market(
             warnings.append(f"{candidate.ticker}: analysis failed: {exc}")
             continue
         if len(analysis.data_sources) < MIN_EVIDENCE_SOURCES or analysis.last_price is None:
-            warnings.append(
-                f"{candidate.ticker}: excluded because evidence coverage is below "
-                f"the {MIN_EVIDENCE_SOURCES}-source threshold"
-            )
+            warnings.append(f"{candidate.ticker}: excluded because evidence coverage is below the {MIN_EVIDENCE_SOURCES}-source threshold")
             continue
-        # The final publication score combines the horizon-specific discovery
-        # shortlist with the fully analyzed stock score and confidence.
-        final_score = candidate.score * 0.35 + analysis.score * 0.65
-        analyzed.append((final_score * analysis.confidence, analysis))
+
+        # Discovery scores are already 0..100. StockAnalysis scores are -100..100,
+        # so normalize them before combining the two ranking signals.
+        analysis_score = max(0.0, min(100.0, (analysis.score + 100.0) / 2.0))
+        final_score = candidate.score * 0.35 + analysis_score * 0.65
+        ranking_score = final_score * max(0.0, min(1.0, analysis.confidence))
+        analyzed.append((ranking_score, analysis))
 
     analyzed.sort(key=lambda item: (item[0], item[1].ticker), reverse=True)
     return MarketRecommendations(
@@ -115,12 +124,21 @@ def asdict(result: MarketRecommendations) -> dict[str, Any]:
 
 def _stock_dict(item: StockAnalysis) -> dict[str, Any]:
     return {
-        "ticker": item.ticker, "market": item.market, "horizon": item.horizon,
-        "action": item.action, "score": item.score, "confidence": item.confidence,
+        "ticker": item.ticker,
+        "market": item.market,
+        "horizon": item.horizon,
+        "action": item.action,
+        "score": item.score,
+        "confidence": item.confidence,
         "last_price": item.last_price,
         "buy_range": list(item.buy_range) if item.buy_range else None,
-        "stop_loss": item.stop_loss, "targets": list(item.targets) if item.targets else None,
-        "hypothesis": item.hypothesis, "prediction_basis": item.prediction_basis,
-        "favorable_market": item.favorable_market, "sector_news": item.sector_news,
-        "risks": item.risks, "data_sources": item.data_sources, "warnings": item.warnings,
+        "stop_loss": item.stop_loss,
+        "targets": list(item.targets) if item.targets else None,
+        "hypothesis": item.hypothesis,
+        "prediction_basis": item.prediction_basis,
+        "favorable_market": item.favorable_market,
+        "sector_news": item.sector_news,
+        "risks": item.risks,
+        "data_sources": item.data_sources,
+        "warnings": item.warnings,
     }

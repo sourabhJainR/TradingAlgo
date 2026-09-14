@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 
@@ -38,5 +38,27 @@ def finnhub_candles(ticker: str, payload: dict[str, Any]) -> list[Candle]:
             ts, op, hi, lo, cl, vol = values
             candles.append(Candle(ticker, date.fromtimestamp(int(ts)), float(op), float(hi), float(lo), float(cl), float(vol)))
         except (TypeError, ValueError, OverflowError):
+            continue
+    return sorted(candles, key=lambda x: x.session)
+
+
+def nse_historical(ticker: str, payload: dict[str, Any]) -> list[Candle]:
+    """Normalize the public NSE historical equity response."""
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    candles: list[Candle] = []
+    for row in rows:
+        try:
+            raw_date = str(row.get("mTIMESTAMP") or row.get("CH_TIMESTAMP") or row.get("TIMESTAMP"))
+            session = datetime.strptime(raw_date[:10], "%d-%b-%Y").date()
+            candles.append(Candle(
+                ticker,
+                session,
+                float(row["CH_OPENING_PRICE"]),
+                float(row["CH_TRADE_HIGH_PRICE"]),
+                float(row["CH_TRADE_LOW_PRICE"]),
+                float(row["CH_CLOSING_PRICE"]),
+                float(row.get("CH_TOT_TRADED_QTY", 0)),
+            ))
+        except (KeyError, TypeError, ValueError):
             continue
     return sorted(candles, key=lambda x: x.session)

@@ -97,37 +97,51 @@ def _rows(payload: Any) -> Iterable[dict[str, Any]]:
     return ()
 
 
-def _candidate(row: dict[str, Any], provider: str, default_market: str, policy: DiscoveryPolicy) -> MarketCandidate | None:
+def _candidate(
+    row: dict[str, Any],
+    provider: str,
+    default_market: str,
+    policy: DiscoveryPolicy,
+) -> MarketCandidate | None:
     ticker = str(row.get("ticker") or row.get("symbol") or "").strip().upper()
     if not ticker:
         return None
 
-    accepted, filter_reasons = passes_filters(row, policy)
-    # Legacy catalog rows may not carry price/volume/evidence metadata. Do not
-    # manufacture those values; the full-analysis evidence gate remains the
-    # final publication gate in the recommendation service.
-    if policy.min_evidence > 0 and "minimum evidence filter" in filter_reasons:
-        return None
-    if not accepted and filter_reasons:
+    accepted, _filter_reasons = passes_filters(row, policy)
+    if not accepted:
         return None
 
-    supplied_score = row.get("score")
-    if supplied_score is not None:
+    score, factors = score_row(row, policy)
+    if "score" in row and not any(
+        row.get(key) not in (None, "")
+        for key in (
+            "momentum",
+            "return_20d",
+            "change_percentage",
+            "trend",
+            "trend_score",
+            "fundamentals",
+            "fundamental_score",
+            "liquidity",
+            "liquidity_score",
+            "catalyst",
+            "catalyst_score",
+        )
+    ):
         try:
-            score = float(supplied_score)
+            score = max(0.0, min(100.0, float(row["score"])))
         except (TypeError, ValueError):
-            score, factors = score_row(row, policy)
-        else:
-            _, factors = score_row(row, policy)
-    else:
-        score, factors = score_row(row, policy)
+            pass
+
+    if score < policy.min_score:
+        return None
 
     rationale = str(row.get("rationale") or row.get("reason") or _rationale(policy, factors))
     return MarketCandidate(
         ticker=ticker,
         market=str(row.get("market") or default_market),
         name=str(row.get("name")) if row.get("name") else None,
-        score=max(-100.0, min(100.0, score)),
+        score=max(0.0, min(100.0, score)),
         rationale=rationale,
         factors=factors,
         source=provider,

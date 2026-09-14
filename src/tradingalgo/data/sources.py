@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+
+import httpx
 
 from .providers import HttpProvider, ProviderResponse
 
@@ -20,7 +23,9 @@ class SourceConfig:
             alpha_vantage_key=os.getenv("ALPHAVANTAGE_API_KEY"),
             finnhub_key=os.getenv("FINNHUB_API_KEY"),
             fred_key=os.getenv("FRED_API_KEY"),
-            sec_user_agent=os.getenv("SEC_USER_AGENT", "TradingAlgo research contact: configured-by-user"),
+            sec_user_agent=os.getenv(
+                "SEC_USER_AGENT", "TradingAlgo research contact: configured-by-user"
+            ),
         )
 
 
@@ -43,14 +48,64 @@ class AlphaVantageSource:
     def daily(self, symbol: str, outputsize: str = "compact") -> ProviderResponse:
         return self._call("TIME_SERIES_DAILY", symbol=symbol, outputsize=outputsize)
 
-    def technical(self, function: str, symbol: str, interval: str = "daily", **params: Any) -> ProviderResponse:
+    def technical(
+        self, function: str, symbol: str, interval: str = "daily", **params: Any
+    ) -> ProviderResponse:
         return self._call(function, symbol=symbol, interval=interval, **params)
 
-    def news_sentiment(self, tickers: str | None = None, limit: int = 50) -> ProviderResponse:
+    def news_sentiment(
+        self, tickers: str | None = None, limit: int = 50
+    ) -> ProviderResponse:
         params: dict[str, Any] = {"limit": limit, "sort": "LATEST"}
         if tickers:
             params["tickers"] = tickers
         return self._call("NEWS_SENTIMENT", **params)
+
+
+class NsePublicSource:
+    """Free public NSE website data; no paid NSE subscription is required."""
+
+    name = "nse_public"
+    base_url = "https://www.nseindia.com"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (TradingAlgo research client)",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com/",
+        "Connection": "keep-alive",
+    }
+
+    def _get(self, path: str, params: dict[str, Any]) -> ProviderResponse:
+        with httpx.Client(timeout=20.0, headers=self.headers, follow_redirects=True) as client:
+            warm = client.get(self.base_url + "/")
+            warm.raise_for_status()
+            response = client.get(self.base_url + path, params=params)
+            response.raise_for_status()
+            return ProviderResponse(
+                self.name,
+                str(response.url),
+                datetime.now(timezone.utc),
+                response.json(),
+            )
+
+    def quote(self, symbol: str) -> ProviderResponse:
+        return self._get("/api/quote-equity", {"symbol": symbol.upper()})
+
+    def historical(self, symbol: str, days: int = 500) -> ProviderResponse:
+        end = date.today()
+        start = end - timedelta(days=days * 2)
+        return self._get(
+            "/api/historical/cm/equity",
+            {
+                "symbol": symbol.upper(),
+                "series": '["EQ"]',
+                "from": start.strftime("%d-%m-%Y"),
+                "to": end.strftime("%d-%m-%Y"),
+            },
+        )
+
+    def universe(self, index: str = "NIFTY 500") -> ProviderResponse:
+        return self._get("/api/equity-stockIndices", {"index": index})
 
 
 class FinnhubSource:
@@ -74,9 +129,15 @@ class FinnhubSource:
 
     def candles(self, symbol: str, days: int = 500) -> ProviderResponse:
         import time
+
         end = int(time.time())
-        start = end - days * 86400
-        return self._call("stock/candle", symbol=symbol, resolution="D", _from=start, to=end)
+        return self._call(
+            "stock/candle",
+            symbol=symbol,
+            resolution="D",
+            _from=end - days * 86400,
+            to=end,
+        )
 
     def recommendation_trends(self, symbol: str) -> ProviderResponse:
         return self._call("stock/recommendation", symbol=symbol)
@@ -129,4 +190,13 @@ class GdeltSource:
         self.provider = HttpProvider(self.name, "https://api.gdeltproject.org/api/v2")
 
     def news(self, query: str, max_records: int = 50) -> ProviderResponse:
-        return self.provider.fetch("doc/doc", {"query": query, "mode": "artlist", "format": "json", "maxrecords": max_records, "sort": "datedesc"})
+        return self.provider.fetch(
+            "doc/doc",
+            {
+                "query": query,
+                "mode": "artlist",
+                "format": "json",
+                "maxrecords": max_records,
+                "sort": "datedesc",
+            },
+        )

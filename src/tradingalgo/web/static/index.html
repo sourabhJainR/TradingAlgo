@@ -5,43 +5,29 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TradingAlgo Research</title>
 <style>
-body{font-family:Arial,sans-serif;max-width:1100px;margin:32px auto;padding:0 18px;background:#f6f7f9;color:#18202a}
-header{margin-bottom:22px} h1{margin:0 0 6px} .muted{color:#687384}
-.card{background:white;border:1px solid #dce1e8;border-radius:12px;padding:18px;margin:14px 0;box-shadow:0 2px 8px rgba(0,0,0,.04)}
-form{display:grid;grid-template-columns:1.3fr 1fr 1fr auto;gap:10px}input,select,button{font:inherit;padding:11px;border:1px solid #c9d0d9;border-radius:8px}button{background:#18202a;color:white;cursor:pointer}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{border:1px solid #e0e4ea;border-radius:9px;padding:12px}.metric b{display:block;font-size:21px;margin-top:4px}
-ul{margin:8px 0 0;padding-left:20px}.pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#edf1f5;font-weight:600}
-pre{white-space:pre-wrap}.error{color:#a33}@media(max-width:760px){form,.grid{grid-template-columns:1fr}}
+body{font-family:Arial,sans-serif;max-width:1200px;margin:28px auto;padding:0 18px;background:#f6f7f9;color:#18202a}
+h1{margin:0 0 6px}.muted{color:#687384}.card{background:#fff;border:1px solid #dce1e8;border-radius:12px;padding:18px;margin:14px 0;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+form{display:grid;grid-template-columns:1.4fr 1fr 1fr auto;gap:10px}input,select,button{font:inherit;padding:11px;border:1px solid #c9d0d9;border-radius:8px}button{background:#18202a;color:#fff;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{border:1px solid #e0e4ea;border-radius:9px;padding:12px}.metric b{display:block;font-size:20px;margin-top:4px}
+.tabs{display:flex;gap:8px;margin:14px 0}.tab{background:#edf1f5;color:#18202a}.tab.active{background:#18202a;color:#fff}.panel{display:none}.panel.active{display:block}.pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#edf1f5;font-weight:600}.buy{background:#dff5e4}.avoid{background:#f9dddd}.warn{background:#fff3cd}ul{margin:8px 0 0;padding-left:20px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid #e5e8ed}.error{color:#a33}@media(max-width:760px){form,.grid{grid-template-columns:1fr}.tabs{flex-wrap:wrap}}
 </style>
 </head>
 <body>
-<header><h1>TradingAlgo Research</h1><div class="muted">Ask for a US or Indian stock setup. Research only; no orders are placed.</div></header>
-<div class="card">
-<form id="form">
-<input id="ticker" placeholder="Ticker, e.g. NVDA or RELIANCE" required>
-<select id="market"><option value="US">US market</option><option value="India">Indian market</option></select>
-<select id="horizon"><option value="short">Short term</option><option value="long">Long term</option></select>
-<button>Analyze</button>
-</form>
-</div>
-<div id="result"></div>
+<header><h1>TradingAlgo Research</h1><div class="muted">Free/public-data research only. No broker connection or order execution.</div></header>
+<div class="tabs"><button class="tab active" data-panel="analyze">Analyze</button><button class="tab" data-panel="discover">Discover</button><button class="tab" data-panel="compare">Compare</button><button class="tab" data-panel="risk">Risk sizing</button></div>
+<section id="analyze" class="panel active"><div class="card"><form id="analyzeForm"><input id="ticker" placeholder="Ticker, e.g. NVDA or RELIANCE" required><select id="market"><option value="US">US market</option><option value="India">Indian market</option></select><select id="horizon"><option value="short">Short term</option><option value="long">Long term</option></select><button>Analyze</button></form></div><div id="analysisResult"></div></section>
+<section id="discover" class="panel"><div class="card"><form id="discoverForm"><select id="discoverMarket"><option value="US">US market</option><option value="India">Indian market</option></select><select id="discoverHorizon"><option value="short">Short term</option><option value="long">Long term</option></select><select id="discoverCount"><option>5</option><option>10</option></select><button>Find ideas</button></form><p class="muted">Ranks candidates using trend, momentum, liquidity, evidence, market regime and horizon-specific scoring.</p></div><div id="discoverResult"></div></section>
+<section id="compare" class="panel"><div class="card"><form id="compareForm"><input id="compareTickers" placeholder="NVDA,MSFT,AVGO" required><select id="compareMarket"><option value="US">US market</option><option value="India">Indian market</option></select><select id="compareHorizon"><option value="short">Short term</option><option value="long">Long term</option></select><button>Compare</button></form></div><div id="compareResult"></div></section>
+<section id="risk" class="panel"><div class="card"><form id="riskForm"><input id="capital" type="number" step="any" placeholder="Capital" required><input id="riskPct" type="number" step="any" value="1" placeholder="Risk %"><input id="entry" type="number" step="any" placeholder="Entry" required><input id="stop" type="number" step="any" placeholder="Stop" required><button>Calculate</button></form><p class="muted">Position sizing uses fixed fractional risk plus a maximum position cap. It does not place orders.</p></div><div id="riskResult"></div></section>
 <script>
-const form=document.getElementById('form'), result=document.getElementById('result');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const list=a=>(a||[]).map(x=>`<li>${esc(x)}</li>`).join('');
-form.addEventListener('submit',async e=>{
- e.preventDefault(); result.innerHTML='<div class="card">Running analysis...</div>';
- const q=new URLSearchParams({ticker:document.getElementById('ticker').value,market:document.getElementById('market').value,horizon:document.getElementById('horizon').value});
- try{
-  const r=await fetch('/api/analyze?'+q); const d=await r.json(); if(!r.ok) throw new Error(d.error||'Analysis failed');
-  result.innerHTML=`<div class="card"><span class="pill">${esc(d.action)}</span><h2>${esc(d.ticker)} — ${esc(d.horizon)}</h2>
-  <div class="grid"><div class="metric">Last price<b>${d.last_price??'N/A'}</b></div><div class="metric">Score<b>${d.score}</b></div><div class="metric">Confidence<b>${d.confidence}</b></div>
-  <div class="metric">Buy range<b>${d.buy_range?d.buy_range.join(' - '):'N/A'}</b></div><div class="metric">Stop loss<b>${d.stop_loss??'N/A'}</b></div><div class="metric">Targets<b>${d.targets?d.targets.join(' / '):'N/A'}</b></div></div></div>
-  <div class="card"><h3>Hypothesis</h3><p>${esc(d.hypothesis)}</p><h3>Prediction basis</h3><ul>${list(d.prediction_basis)}</ul></div>
-  <div class="card"><h3>Market context</h3><p>${esc(d.favorable_market)}</p><h3>Sector or company news</h3><ul>${list(d.sector_news)}</ul></div>
-  <div class="card"><h3>Risks</h3><ul>${list(d.risks)}</ul><h3>Data sources</h3><ul>${list(d.data_sources)}</ul>${d.warnings?.length?'<h3>Data warnings</h3><ul>'+list(d.warnings)+'</ul>':''}</div>`;
- }catch(err){result.innerHTML=`<div class="card error">${esc(err.message)}</div>`}
-});
+const fmt=v=>v===null||v===undefined?'N/A':typeof v==='number'?Number(v).toFixed(2):esc(v);
+const get=async(path, target)=>{target.innerHTML='<div class="card">Running analysis...</div>';try{const r=await fetch(path);const d=await r.json();if(!r.ok)throw new Error(d.error||'Request failed');return d}catch(e){target.innerHTML=`<div class="card error">${esc(e.message)}</div>`;return null}};
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab,.panel').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById(b.dataset.panel).classList.add('active')});
+document.getElementById('analyzeForm').onsubmit=async e=>{e.preventDefault();const d=await get('/api/analyze?'+new URLSearchParams({ticker:ticker.value,market:market.value,horizon:horizon.value}),analysisResult);if(!d)return;analysisResult.innerHTML=`<div class="card"><span class="pill ${d.action==='BUY'?'buy':d.action==='AVOID'?'avoid':''}">${esc(d.action)}</span><h2>${esc(d.ticker)} — ${esc(d.horizon)}</h2><div class="grid"><div class="metric">Last price<b>${fmt(d.last_price)}</b></div><div class="metric">Score<b>${fmt(d.score)}</b></div><div class="metric">Confidence<b>${fmt(d.confidence)}</b></div><div class="metric">Buy range<b>${d.buy_range?d.buy_range.map(fmt).join(' - '):'N/A'}</b></div><div class="metric">Stop loss<b>${fmt(d.stop_loss)}</b></div><div class="metric">Targets<b>${d.targets?d.targets.map(fmt).join(' / '):'N/A'}</b></div><div class="metric">RSI(14)<b>${fmt(d.technical_signals?.rsi14)}</b></div><div class="metric">Volatility<b>${fmt(d.technical_signals?.volatility_annualized_pct)}%</b></div></div></div><div class="card"><h3>Hypothesis</h3><p>${esc(d.hypothesis)}</p><h3>Prediction basis</h3><ul>${list(d.prediction_basis)}</ul></div><div class="card"><h3>Technical signals</h3><table>${Object.entries(d.technical_signals||{}).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${fmt(v)}</td></tr>`).join('')}</table></div><div class="card"><h3>Market context</h3><p>${esc(d.favorable_market)}</p><h3>News</h3><ul>${list(d.sector_news)}</ul><h3>Risks</h3><ul>${list(d.risks)}</ul><p class="muted">Sources: ${list(d.data_sources)}</p></div>`};
+document.getElementById('discoverForm').onsubmit=async e=>{e.preventDefault();const d=await get('/api/recommend?'+new URLSearchParams({market:discoverMarket.value,horizon:discoverHorizon.value,limit:'10',recommendations:discoverCount.value}),discoverResult);if(!d)return;discoverResult.innerHTML=`<div class="card"><h2>Top ${d.recommendations.length} ${esc(d.market)} ideas</h2><table><tr><th>Ticker</th><th>Action</th><th>Score</th><th>Confidence</th><th>Entry</th><th>Stop</th><th>Targets</th><th>Hypothesis</th></tr>${d.recommendations.map(x=>`<tr><td>${esc(x.ticker)}</td><td>${esc(x.action)}</td><td>${fmt(x.score)}</td><td>${fmt(x.confidence)}</td><td>${x.buy_range?x.buy_range.map(fmt).join(' - '):'N/A'}</td><td>${fmt(x.stop_loss)}</td><td>${x.targets?x.targets.map(fmt).join(' / '):'N/A'}</td><td>${esc(x.hypothesis)}</td></tr>`).join('')}</table><p class="muted">${esc(d.discovery_provider)}; ${d.candidates_analyzed} candidates analyzed.</p></div>`};
+document.getElementById('compareForm').onsubmit=async e=>{e.preventDefault();const d=await get('/api/compare?'+new URLSearchParams({tickers:compareTickers.value,market:compareMarket.value,horizon:compareHorizon.value}),compareResult);if(!d)return;compareResult.innerHTML=`<div class="card"><h2>Ranked comparison</h2><table><tr><th>Ticker</th><th>Action</th><th>Score</th><th>Confidence</th><th>RSI</th><th>Drawdown</th><th>52W high distance</th></tr>${d.results.map(x=>`<tr><td>${esc(x.ticker)}</td><td>${esc(x.action||x.error||'')}</td><td>${fmt(x.score)}</td><td>${fmt(x.confidence)}</td><td>${fmt(x.technical_signals?.rsi14)}</td><td>${fmt(x.technical_signals?.max_drawdown_pct)}%</td><td>${fmt(x.technical_signals?.distance_from_52w_high_pct)}%</td></tr>`).join('')}</table></div>`};
+document.getElementById('riskForm').onsubmit=async e=>{e.preventDefault();const d=await get('/api/risk?'+new URLSearchParams({capital:capital.value,risk_percent:riskPct.value,entry:entry.value,stop:stop.value}),riskResult);if(!d)return;riskResult.innerHTML=`<div class="card"><h2>Risk-based position</h2><div class="grid"><div class="metric">Risk budget<b>${fmt(d.risk_budget)}</b></div><div class="metric">Units<b>${fmt(d.units)}</b></div><div class="metric">Position value<b>${fmt(d.position_value)}</b></div><div class="metric">Position %<b>${fmt(d.position_percent)}%</b></div></div><p>Risk per share: ${fmt(d.risk_per_share)}. This is a sizing calculation, not an order instruction.</p></div>`};
 </script>
 </body>
 </html>

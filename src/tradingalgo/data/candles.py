@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from csv import DictReader
 from dataclasses import dataclass
 from datetime import date, datetime
+from io import StringIO
 from typing import Any
 
 
@@ -22,6 +24,16 @@ def alpha_vantage_daily(ticker: str, payload: dict[str, Any]) -> list[Candle]:
     for day, row in series.items():
         try:
             candles.append(Candle(ticker, date.fromisoformat(day), float(row["1. open"]), float(row["2. high"]), float(row["3. low"]), float(row["4. close"]), float(row.get("5. volume", 0))))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(candles, key=lambda x: x.session)
+
+
+def stooq_daily(ticker: str, payload: str) -> list[Candle]:
+    candles: list[Candle] = []
+    for row in DictReader(StringIO(payload)):
+        try:
+            candles.append(Candle(ticker, date.fromisoformat(row["Date"]), float(row["Open"]), float(row["High"]), float(row["Low"]), float(row["Close"]), float(row.get("Volume") or 0)))
         except (KeyError, TypeError, ValueError):
             continue
     return sorted(candles, key=lambda x: x.session)
@@ -50,15 +62,7 @@ def nse_historical(ticker: str, payload: dict[str, Any]) -> list[Candle]:
         try:
             raw_date = str(row.get("mTIMESTAMP") or row.get("CH_TIMESTAMP") or row.get("TIMESTAMP"))
             session = datetime.strptime(raw_date[:10], "%d-%b-%Y").date()
-            candles.append(Candle(
-                ticker,
-                session,
-                float(row["CH_OPENING_PRICE"]),
-                float(row["CH_TRADE_HIGH_PRICE"]),
-                float(row["CH_TRADE_LOW_PRICE"]),
-                float(row["CH_CLOSING_PRICE"]),
-                float(row.get("CH_TOT_TRADED_QTY", 0)),
-            ))
+            candles.append(Candle(ticker, session, float(row["CH_OPENING_PRICE"]), float(row["CH_TRADE_HIGH_PRICE"]), float(row["CH_TRADE_LOW_PRICE"]), float(row["CH_CLOSING_PRICE"]), float(row.get("CH_TOT_TRADED_QTY", 0))))
         except (KeyError, TypeError, ValueError):
             continue
     return sorted(candles, key=lambda x: x.session)

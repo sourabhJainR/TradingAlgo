@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from tradingalgo.data.candles import alpha_vantage_daily, finnhub_candles, nse_historical
 from tradingalgo.data.sources import AlphaVantageSource, FinnhubSource, NsePublicSource, SourceConfig
+from tradingalgo.intelligence.technical_analytics import analyze as analyze_technical
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class StockAnalysis:
     risks: list[str]
     data_sources: list[str]
     warnings: list[str]
+    technical_signals: dict[str, float | str | None]
 
 
 def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig | None = None) -> StockAnalysis:
@@ -48,8 +50,6 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
     news: list[dict[str, Any]] = []
     sector = ""
 
-    # Finnhub remains a compatibility adapter, but it is not required by the
-    # recommendation path. Free Alpha Vantage is preferred when configured.
     if cfg.alpha_vantage_key:
         provider = AlphaVantageSource(cfg)
         provider_symbol = _alpha_symbol(symbol, market_key)
@@ -73,8 +73,6 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
         except Exception as exc:
             warnings.append(f"News unavailable: {exc}")
     elif market_key == "india":
-        # Free public NSE fallback: quote + historical OHLCV are sufficient for
-        # the technical model and the minimum two-source publication gate.
         provider = NsePublicSource()
         try:
             payload = provider.quote(symbol).payload
@@ -110,6 +108,7 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
 
     last_price = _last_price(quote, candles)
     metrics = _technical_metrics(candles)
+    technical_signals = analyze_technical(candles)
     score = _score(metrics, horizon_key)
     action = _action(score)
     confidence = _confidence(metrics, news, sources)
@@ -117,7 +116,7 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
     market_view = _market_view(metrics)
     sector_news = _news_lines(news, sector)
     risks = _risks(metrics, market_view, news, warnings)
-    basis = _basis(metrics, horizon_key, market_view, sector_news)
+    basis = _basis(metrics, horizon_key, market_view, technical_signals)
     hypothesis = _hypothesis(action, metrics, horizon_key)
 
     return StockAnalysis(
@@ -138,6 +137,7 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
         risks=risks,
         data_sources=sources,
         warnings=warnings,
+        technical_signals=technical_signals,
     )
 
 
@@ -201,11 +201,7 @@ def _score(m: dict[str, float], horizon: str) -> float:
     if not m:
         return 0.0
     p = m["price"]
-    score = (
-        (30 if p > m["sma20"] else -30)
-        + (25 if p > m["sma50"] else -25)
-        + (25 if p > m["sma200"] else -25)
-    )
+    score = ((30 if p > m["sma20"] else -30) + (25 if p > m["sma50"] else -25) + (25 if p > m["sma200"] else -25))
     score += 20 if (p > m["high20"] * 0.98 if horizon == "short" else p > m["sma50"]) else -20
     return max(-100.0, min(100.0, score))
 
@@ -222,17 +218,10 @@ def _confidence(m: dict[str, float], news: list[dict[str, Any]], sources: list[s
     if not m:
         return 0.15
     coverage = min(1.0, len(sources) / 4.0)
-    return min(
-        0.95,
-        0.35 + 0.25 * coverage + (0.15 if news else 0.0) + (0.25 if m.get("sma200", 0) else 0.0),
-    )
+    return min(0.95, 0.35 + 0.25 * coverage + (0.15 if news else 0.0) + (0.25 if m.get("sma200", 0) else 0.0))
 
 
-def _levels(
-    price: float | None,
-    m: dict[str, float],
-    horizon: str,
-) -> tuple[float, float, float, float, float] | None:
+def _levels(price: float | None, m: dict[str, float], horizon: str) -> tuple[float, float, float, float, float] | None:
     if price is None or not m:
         return None
     atr = max(m["atr"], price * 0.01)
@@ -265,20 +254,14 @@ def _market_view(m: dict[str, float]) -> str:
 
 
 def _news_lines(news: list[dict[str, Any]], sector: str) -> list[str]:
-    lines = [
-        str(item.get("headline") or item.get("title") or item.get("summary")).strip()
-        for item in news[:6]
-        if item.get("headline") or item.get("title") or item.get("summary")
-    ]
-    return lines or [
-        f"No recent {sector + ' ' if sector else ''}news was returned by the configured provider."
-    ]
+    lines = [str(item.get("headline") or item.get("title") or item.get("summary")).strip() for item in news[:6] if item.get("headline") or item.get("title") or item.get("summary")]
+    return lines or [f"No recent {sector + ' ' if sector else ''}news was returned by the configured provider."]
 
 
-def _basis(m: dict[str, float], horizon: str, market_view: str, news: list[str]) -> list[str]:
+def _basis(m: dict[str, float], horizon: str, market_view: str, signals: dict[str, Any]) -> list[str]:
     if not m:
         return ["Insufficient market-price history; no technical prediction is asserted."]
-    return [
+    basis = [
         f"Price versus 20/50/200-session moving averages: {m['price']:.2f} / {m['sma20']:.2f} / {m['sma50']:.2f} / {m['sma200']:.2f}.",
         f"ATR-based risk distance is {m['atr']:.2f}.",
         f"20-session range is {m['low20']:.2f} to {m['high20']:.2f}.",
@@ -286,6 +269,13 @@ def _basis(m: dict[str, float], horizon: str, market_view: str, news: list[str])
         market_view,
         f"Horizon rule: {horizon} setup; levels are derived from trend, range and ATR rather than a discretionary price guess.",
     ]
+    rsi = signals.get("rsi14")
+    macd_hist = signals.get("macd_histogram")
+    if rsi is not None:
+        basis.append(f"RSI(14) is {rsi:.2f}; readings below 30 are treated as oversold and above 70 as overbought.")
+    if macd_hist is not None:
+        basis.append(f"MACD histogram is {macd_hist:.4f}; positive values indicate short-term momentum is above its signal line.")
+    return basis
 
 
 def _hypothesis(action: str, m: dict[str, float], horizon: str) -> str:
@@ -298,12 +288,7 @@ def _hypothesis(action: str, m: dict[str, float], horizon: str) -> str:
     return f"The {horizon} hypothesis is inconclusive because the trend signals do not align strongly enough for a directional setup."
 
 
-def _risks(
-    m: dict[str, float],
-    market_view: str,
-    news: list[dict[str, Any]],
-    warnings: list[str],
-) -> list[str]:
+def _risks(m: dict[str, float], market_view: str, news: list[dict[str, Any]], warnings: list[str]) -> list[str]:
     risks = [
         "Technical levels can fail after earnings, macro shocks or gap moves.",
         "Stop-loss levels are research levels, not guaranteed execution prices.",
@@ -317,3 +302,11 @@ def _risks(
     if warnings:
         risks.append("Some requested data sources were unavailable, reducing confidence.")
     return risks
+
+
+def _asdict(result: StockAnalysis) -> dict[str, Any]:
+    data = asdict(result)
+    data["buy_range"] = list(result.buy_range) if result.buy_range else None
+    data["targets"] = list(result.targets) if result.targets else None
+    data["advisory_only"] = True
+    return data

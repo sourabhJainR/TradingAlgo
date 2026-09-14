@@ -33,12 +33,7 @@ def recommend_market(
     recommendations: int = 5,
     config: SourceConfig | None = None,
 ) -> MarketRecommendations:
-    """Discover candidates, apply horizon scoring, then publish evidence-backed leaders.
-
-    The recommendation path uses only free/public market-data routes. India
-    always discovers from the public NSE universe; Alpha Vantage is used for
-    US discovery when its free API key is configured.
-    """
+    """Discover candidates, apply horizon scoring, then publish evidence-backed leaders."""
     if limit < 1 or recommendations < 1 or recommendations > limit:
         raise ValueError("limit and recommendations must be positive, with recommendations <= limit")
     market_key = market.strip().lower()
@@ -64,14 +59,7 @@ def recommend_market(
             "The application uses only Alpha Vantage's free API path; no paid provider is required."
         )
 
-    result = discovery.discover(
-        fetch,
-        provider=provider_name,
-        market=market_key,
-        limit=limit,
-        horizon=horizon_key,
-        min_evidence=3,
-    )
+    result = discovery.discover(fetch, provider=provider_name, market=market_key, limit=limit, horizon=horizon_key, min_evidence=3)
     if result.errors:
         raise RuntimeError("Market discovery failed: " + "; ".join(f"{k}: {v}" for k, v in result.errors.items()))
     if not result.candidates:
@@ -88,9 +76,6 @@ def recommend_market(
         if len(analysis.data_sources) < MIN_EVIDENCE_SOURCES or analysis.last_price is None:
             warnings.append(f"{candidate.ticker}: excluded because evidence coverage is below the {MIN_EVIDENCE_SOURCES}-source threshold")
             continue
-
-        # Discovery scores are already 0..100. StockAnalysis scores are -100..100,
-        # so normalize them before combining the two ranking signals.
         analysis_score = max(0.0, min(100.0, (analysis.score + 100.0) / 2.0))
         final_score = candidate.score * 0.35 + analysis_score * 0.65
         ranking_score = final_score * max(0.0, min(1.0, analysis.confidence))
@@ -141,4 +126,5 @@ def _stock_dict(item: StockAnalysis) -> dict[str, Any]:
         "risks": item.risks,
         "data_sources": item.data_sources,
         "warnings": item.warnings,
+        "technical_signals": item.technical_signals,
     }

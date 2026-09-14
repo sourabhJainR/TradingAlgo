@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+from email.parser import BytesParser
+from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from tradingalgo.data.sources import SourceConfig
+from tradingalgo.intelligence.portfolio_connectors import (
+    INDMoneyPortfolioPlugin,
+    ZerodhaPortfolioPlugin,
+    load_portfolio_bytes,
+)
 from tradingalgo.intelligence.research_suite import (
     alert_signals,
     backtest_symbol,
@@ -30,6 +38,27 @@ class ResearchHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _json(self, status: int, payload: object) -> None:
+        self._send(status, "application/json", json.dumps(payload, default=str))
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/portfolio/import":
+            self._json(404, {"error": "not found"})
+            return
+        try:
+            provider, filename, content = _multipart_upload(self)
+            if provider == "indmoney":
+                snapshot = INDMoneyPortfolioPlugin().import_bytes(filename, content)
+            else:
+                snapshot = load_portfolio_bytes(filename, content, provider="excel")
+            result = _analyze_portfolio_snapshot(snapshot)
+            self._json(200, result)
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)})
+        except Exception as exc:
+            self._json(500, {"error": f"portfolio import failed: {exc}"})
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -176,12 +205,24 @@ class ResearchHandler(BaseHTTPRequestHandler):
                     except Exception as exc:
                         warnings.append(f"{ticker}: {exc}")
                 result = portfolio_diagnostics(holdings, analyses)
-                result.update({"market": market, "horizon": horizon, "warnings": warnings})
+                result.update({"market": market, "horizon": horizon, "warnings": warnings, "source": "manual"})
                 self._send(200, "application/json", json.dumps(result))
             except ValueError as exc:
                 self._send(400, "application/json", json.dumps({"error": str(exc)}))
             except Exception as exc:
                 self._send(500, "application/json", json.dumps({"error": f"portfolio analysis failed: {exc}"}))
+            return
+        if parsed.path == "/api/portfolio/broker":
+            try:
+                broker = query.get("broker", [""])[0].strip().lower()
+                if broker != "zerodha":
+                    raise ValueError("live broker source currently supports Zerodha; use Excel/CSV for INDmoney")
+                snapshot = ZerodhaPortfolioPlugin().holdings()
+                self._send(200, "application/json", json.dumps(_analyze_portfolio_snapshot(snapshot)))
+            except ValueError as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}))
+            except Exception as exc:
+                self._send(502, "application/json", json.dumps({"error": f"broker portfolio import failed: {exc}"}))
             return
         if parsed.path == "/api/alerts":
             try:
@@ -240,6 +281,63 @@ class ResearchHandler(BaseHTTPRequestHandler):
         return
 
 
+def _multipart_upload(handler: ResearchHandler) -> tuple[str, str, bytes]:
+    content_type = handler.headers.get("Content-Type", "")
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise ValueError("portfolio import requires multipart/form-data")
+    length = int(handler.headers.get("Content-Length", "0"))
+    if length <= 0 or length > 10 * 1024 * 1024:
+        raise ValueError("portfolio upload must be between 1 byte and 10 MB")
+    body = handler.rfile.read(length)
+    message = BytesParser(policy=default).parsebytes(
+        b"Content-Type: " + content_type.encode("utf-8") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
+    )
+    provider = "excel"
+    filename = ""
+    content = b""
+    for part in message.iter_parts():
+        disposition = part.get("Content-Disposition", "")
+        if "provider" in disposition and part.get_content_disposition() == "form-data":
+            provider = part.get_content().strip().lower()
+        if part.get_filename():
+            filename = part.get_filename()
+            content = part.get_payload(decode=True) or b""
+    if not filename or not content:
+        raise ValueError("a portfolio .xlsx, .xls or .csv file is required")
+    if provider not in {"excel", "indmoney"}:
+        raise ValueError("provider must be excel or indmoney")
+    return provider, filename, content
+
+
+def _analyze_portfolio_snapshot(snapshot: Any) -> dict[str, object]:
+    if len(snapshot.positions) > 50:
+        raise ValueError("portfolio supports at most 50 positions")
+    market = "US" if snapshot.currency.upper() in {"USD", "USN"} else "India"
+    horizon = "long"
+    holdings = snapshot.weights()
+    cfg = SourceConfig.from_env()
+    analyses = []
+    warnings = list(snapshot.warnings or [])
+    for ticker in holdings:
+        try:
+            analyses.append(analyze_stock(ticker, market, horizon, cfg))
+        except Exception as exc:
+            warnings.append(f"{ticker}: {exc}")
+    result = portfolio_diagnostics(holdings, analyses)
+    result.update({
+        "provider": snapshot.provider,
+        "source": snapshot.source,
+        "currency": snapshot.currency,
+        "positions_imported": len(snapshot.positions),
+        "imported_positions": [item.as_dict() for item in snapshot.positions],
+        "market": market,
+        "horizon": horizon,
+        "warnings": warnings,
+        "advisory_only": True,
+    })
+    return result
+
+
 def _csv(value: str) -> list[str]:
     return [item.strip().upper() for item in value.split(",") if item.strip()]
 
@@ -269,5 +367,5 @@ def _bool_query(query: dict[str, list[str]], key: str) -> bool:
 def serve(host: str = "127.0.0.1", port: int = 8080) -> None:
     server = ThreadingHTTPServer((host, port), ResearchHandler)
     print(f"TradingAlgo research UI: http://{host}:{port}")
-    print("Research only: no broker or order execution is exposed by this server.")
+    print("Research only: no order execution is exposed by this server.")
     server.serve_forever()

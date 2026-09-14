@@ -49,9 +49,10 @@ class IntelligenceOrchestrator:
         self.learning = learning
 
     def _first_available(self, channel: str, candidates: list[FetchCandidate], errors: dict[str, str]):
+        candidate_errors: dict[str, str] = {}
         for candidate in candidates:
             if not self.health.get(candidate.provider).available:
-                errors[candidate.provider] = "provider health gate is open"
+                candidate_errors[candidate.provider] = "provider health gate is open"
                 continue
             try:
                 response = candidate.fetch()
@@ -59,7 +60,8 @@ class IntelligenceOrchestrator:
                 return candidate.provider, response
             except Exception as exc:
                 self.health.record_failure(candidate.provider)
-                errors[f"{channel}:{candidate.provider}"] = str(exc)
+                candidate_errors[f"{channel}:{candidate.provider}"] = str(exc)
+        errors.update(candidate_errors)
         return None
 
     def collect(self, ticker: str, *, quote: list[FetchCandidate] | None = None, analyst: list[FetchCandidate] | None = None,

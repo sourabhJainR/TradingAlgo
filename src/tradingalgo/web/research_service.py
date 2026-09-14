@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Any
 
 from tradingalgo.data.candles import alpha_vantage_daily, finnhub_candles
@@ -35,6 +35,8 @@ def analyze_stock(ticker: str, market: str, horizon: str, config: SourceConfig |
     symbol = ticker.strip().upper()
     market_key = market.strip().lower()
     horizon_key = horizon.strip().lower()
+    if not symbol:
+        raise ValueError("ticker is required")
     if market_key not in {"us", "india"}:
         raise ValueError("market must be US or India")
     if horizon_key not in {"short", "long"}:
@@ -168,8 +170,8 @@ def _technical_metrics(candles: list[Any]) -> dict[str, float]:
     low20 = min(lows[-20:])
     high52 = max(highs[-252:])
     low52 = min(lows[-252:])
-    return {"price": price, "sma20": sma20, "sma50": sma50, "sma200": sma200,
-            "atr": atr, "high20": high20, "low20": low20, "high52": high52, "low52": low52}
+    return {"price": price, "sma20": sma20, "sma50": sma50, "sma200": sma200, "atr": atr,
+            "high20": high20, "low20": low20, "high52": high52, "low52": low52}
 
 
 def _score(m: dict[str, float], horizon: str) -> float:
@@ -283,14 +285,10 @@ def _risks(m: dict[str, float], market_view: str, news: list[dict[str, Any]], wa
 
 
 def _asdict(result: StockAnalysis) -> dict[str, Any]:
-    return {
-        "ticker": result.ticker, "market": result.market, "horizon": result.horizon,
-        "action": result.action, "score": result.score, "confidence": result.confidence,
-        "last_price": result.last_price,
-        "buy_range": list(result.buy_range) if result.buy_range else None,
-        "stop_loss": result.stop_loss,
-        "targets": list(result.targets) if result.targets else None,
-        "hypothesis": result.hypothesis, "prediction_basis": result.prediction_basis,
-        "favorable_market": result.favorable_market, "sector_news": result.sector_news,
-        "risks": result.risks, "data_sources": result.data_sources, "warnings": result.warnings,
-    }
+    return {"ticker": result.ticker, "market": result.market, "horizon": result.horizon,
+            "action": result.action, "score": result.score, "confidence": result.confidence,
+            "last_price": result.last_price, "buy_range": list(result.buy_range) if result.buy_range else None,
+            "stop_loss": result.stop_loss, "targets": list(result.targets) if result.targets else None,
+            "hypothesis": result.hypothesis, "prediction_basis": result.prediction_basis,
+            "favorable_market": result.favorable_market, "sector_news": result.sector_news,
+            "risks": result.risks, "data_sources": result.data_sources, "warnings": result.warnings}

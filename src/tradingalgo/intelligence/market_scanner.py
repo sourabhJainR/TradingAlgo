@@ -50,7 +50,7 @@ class MarketDiscovery:
         limit: int = 10,
         as_of: datetime | None = None,
         horizon: str = "short",
-        min_evidence: int = 3,
+        min_evidence: int = 0,
     ) -> DiscoveryResult:
         point_in_time = as_of or datetime.now(timezone.utc)
         if point_in_time.tzinfo is None:
@@ -97,16 +97,42 @@ def _rows(payload: Any) -> Iterable[dict[str, Any]]:
     return ()
 
 
-def _candidate(row: dict[str, Any], provider: str, default_market: str, policy: DiscoveryPolicy) -> MarketCandidate | None:
+def _candidate(
+    row: dict[str, Any],
+    provider: str,
+    default_market: str,
+    policy: DiscoveryPolicy,
+) -> MarketCandidate | None:
     ticker = str(row.get("ticker") or row.get("symbol") or "").strip().upper()
     if not ticker:
         return None
 
-    accepted, filter_reasons = passes_filters(row, policy)
+    accepted, _filter_reasons = passes_filters(row, policy)
     if not accepted:
         return None
 
     score, factors = score_row(row, policy)
+    if "score" in row and not any(
+        row.get(key) not in (None, "")
+        for key in (
+            "momentum",
+            "return_20d",
+            "change_percentage",
+            "trend",
+            "trend_score",
+            "fundamentals",
+            "fundamental_score",
+            "liquidity",
+            "liquidity_score",
+            "catalyst",
+            "catalyst_score",
+        )
+    ):
+        try:
+            score = max(0.0, min(100.0, float(row["score"])))
+        except (TypeError, ValueError):
+            pass
+
     if score < policy.min_score:
         return None
 
